@@ -90,6 +90,21 @@ In this thesis:
 - Automatic quality checks on `plan` and `replan`
 - Local state in `/.deeplan/`
 
+## Insight Axes (Long-Horizon Planning)
+
+DeepPlan maps planning insight into eight required axes:
+
+1. `direction_insights`
+2. `market_insights`
+3. `timing_insights`
+4. `differentiation_insights`
+5. `monetization_insights`
+6. `constraint_insights`
+7. `risk_signal_insights`
+8. `evolution_insights`
+
+`qa` checks whether all 8 axes are covered.
+
 ## Messaging Drafts
 
 ### Slogans
@@ -114,7 +129,15 @@ python3 deepplan.py plan \
   --goal "Ship DeepPlan MVP CLI" \
   --success-metric "CLI supports plan/replan/decide/risk by 2026-03-15" \
   --deadline "2026-03-15" \
-  --constraints "single developer, local repo only"
+  --constraints "single developer, local repo only" \
+  --direction-insights "Why this initiative matters now" \
+  --market-insights "Who has the strongest pain and why" \
+  --timing-insights "Why now is the right timing" \
+  --differentiation-insights "How this is strategically different" \
+  --monetization-insights "How value turns into revenue" \
+  --constraint-insights "Key constraints and workaround strategy" \
+  --risk-signal-insights "Earliest failure signal and response" \
+  --evolution-insights "How the plan evolves weekly"
 python3 deepplan.py qa
 python3 deepplan.py show
 ```

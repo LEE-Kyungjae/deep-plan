@@ -13,10 +13,21 @@
     "assumptions",
     "options",
     "selected_option",
-    "tasks",
+    "plan_tasks",
+    "execution_tasks",
     "dependencies",
     "experiments",
     "risks",
+    "references",
+    "insights",
+    "direction_insights",
+    "market_insights",
+    "timing_insights",
+    "differentiation_insights",
+    "monetization_insights",
+    "constraint_insights",
+    "risk_signal_insights",
+    "evolution_insights",
     "definition_of_done",
     "evidence"
   ],
@@ -57,7 +68,13 @@
     "selected_option": {
       "type": "string"
     },
-    "tasks": {
+    "plan_tasks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "execution_tasks": {
       "type": "array",
       "items": {
         "type": "string"
@@ -103,6 +120,66 @@
             "additionalProperties": true
           }
         ]
+      }
+    },
+    "references": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "insights": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "direction_insights": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "market_insights": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "timing_insights": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "differentiation_insights": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "monetization_insights": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "constraint_insights": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "risk_signal_insights": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "evolution_insights": {
+      "type": "array",
+      "items": {
+        "type": "string"
       }
     },
     "definition_of_done": {

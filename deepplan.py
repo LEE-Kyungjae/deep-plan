@@ -30,7 +30,7 @@ def ensure_state() -> None:
 
 def default_plan() -> Dict:
     return {
-        "version": "0.2.0",
+        "version": "0.3.0",
         "updated_at": now_iso(),
         "goal": "",
         "success_metric": "",
@@ -46,6 +46,14 @@ def default_plan() -> Dict:
         "risks": [],
         "references": [],
         "insights": [],
+        "direction_insights": [],
+        "market_insights": [],
+        "timing_insights": [],
+        "differentiation_insights": [],
+        "monetization_insights": [],
+        "constraint_insights": [],
+        "risk_signal_insights": [],
+        "evolution_insights": [],
         "definition_of_done": [],
         "evidence": [],
     }
@@ -60,7 +68,7 @@ def migrate_plan(plan: Dict) -> Dict:
     plan.pop("tasks", None)
 
     for key, default in [
-        ("version", "0.2.0"),
+        ("version", "0.3.0"),
         ("updated_at", now_iso()),
         ("goal", ""),
         ("success_metric", ""),
@@ -76,12 +84,20 @@ def migrate_plan(plan: Dict) -> Dict:
         ("risks", []),
         ("references", []),
         ("insights", []),
+        ("direction_insights", []),
+        ("market_insights", []),
+        ("timing_insights", []),
+        ("differentiation_insights", []),
+        ("monetization_insights", []),
+        ("constraint_insights", []),
+        ("risk_signal_insights", []),
+        ("evolution_insights", []),
         ("definition_of_done", []),
         ("evidence", []),
     ]:
         plan.setdefault(key, default)
 
-    plan["version"] = "0.2.0"
+    plan["version"] = "0.3.0"
     return plan
 
 
@@ -230,6 +246,20 @@ def task_balance_ok(plan: Dict) -> bool:
     return 0.4 <= ratio <= 0.6
 
 
+def insight_axes_covered(plan: Dict) -> bool:
+    axes = [
+        "direction_insights",
+        "market_insights",
+        "timing_insights",
+        "differentiation_insights",
+        "monetization_insights",
+        "constraint_insights",
+        "risk_signal_insights",
+        "evolution_insights",
+    ]
+    return all(non_empty(plan.get(k)) for k in axes)
+
+
 @dataclass
 class CheckResult:
     name: str
@@ -272,9 +302,9 @@ def run_qa(plan: Dict) -> Tuple[int, List[CheckResult], bool]:
     )
     checks.append(
         CheckResult(
-            "insights_coverage",
-            len(plan.get("insights", [])) >= 3,
-            "Plan includes at least three actionable insights.",
+            "insight_axes_coverage",
+            insight_axes_covered(plan),
+            "Eight long-horizon insight axes are all covered.",
             10,
         )
     )
@@ -365,12 +395,29 @@ def auto_replan_stub(plan: Dict, checks: List[CheckResult]) -> Dict:
             "Agent workflow docs",
             "Postmortem of failed planning cases",
         ]
-    if "insights_coverage" in failed and len(plan.get("insights", [])) < 3:
+    if "insight_axes_coverage" in failed and len(plan.get("insights", [])) < 3:
         plan["insights"] = [
             "Treat planning as first-class work, not overhead.",
             "Require evidence links for every critical decision.",
             "Replan from execution signals, not intuition.",
         ]
+    if "insight_axes_coverage" in failed:
+        if not plan.get("direction_insights"):
+            plan["direction_insights"] = ["State why this initiative matters now and what outcome it must create."]
+        if not plan.get("market_insights"):
+            plan["market_insights"] = ["Identify the highest-pain user segment and current alternatives."]
+        if not plan.get("timing_insights"):
+            plan["timing_insights"] = ["Define why this timing is favorable now and what delay would cost."]
+        if not plan.get("differentiation_insights"):
+            plan["differentiation_insights"] = ["Describe one clear strategic difference versus existing options."]
+        if not plan.get("monetization_insights"):
+            plan["monetization_insights"] = ["Link user value to a concrete monetization path."]
+        if not plan.get("constraint_insights"):
+            plan["constraint_insights"] = ["List execution constraints and the intended workaround strategy."]
+        if not plan.get("risk_signal_insights"):
+            plan["risk_signal_insights"] = ["Define one early failure signal and the immediate response."]
+        if not plan.get("evolution_insights"):
+            plan["evolution_insights"] = ["Define how the plan will be revised on a weekly or monthly cadence."]
     if "plan_execution_balance" in failed:
         if len(plan.get("plan_tasks", [])) == 0:
             plan["plan_tasks"] = [
@@ -426,6 +473,22 @@ def cmd_plan(args: argparse.Namespace) -> None:
         plan["references"] = parse_csv(args.references)
     if args.insights:
         plan["insights"] = parse_csv(args.insights)
+    if args.direction_insights:
+        plan["direction_insights"] = parse_csv(args.direction_insights)
+    if args.market_insights:
+        plan["market_insights"] = parse_csv(args.market_insights)
+    if args.timing_insights:
+        plan["timing_insights"] = parse_csv(args.timing_insights)
+    if args.differentiation_insights:
+        plan["differentiation_insights"] = parse_csv(args.differentiation_insights)
+    if args.monetization_insights:
+        plan["monetization_insights"] = parse_csv(args.monetization_insights)
+    if args.constraint_insights:
+        plan["constraint_insights"] = parse_csv(args.constraint_insights)
+    if args.risk_signal_insights:
+        plan["risk_signal_insights"] = parse_csv(args.risk_signal_insights)
+    if args.evolution_insights:
+        plan["evolution_insights"] = parse_csv(args.evolution_insights)
     if args.dependencies:
         plan["dependencies"] = parse_csv(args.dependencies)
     if args.experiments:
@@ -460,6 +523,22 @@ def cmd_replan(args: argparse.Namespace) -> None:
         plan.setdefault("references", []).append(args.reference.strip())
     if args.insight:
         plan.setdefault("insights", []).append(args.insight.strip())
+    if args.direction_insight:
+        plan.setdefault("direction_insights", []).append(args.direction_insight.strip())
+    if args.market_insight:
+        plan.setdefault("market_insights", []).append(args.market_insight.strip())
+    if args.timing_insight:
+        plan.setdefault("timing_insights", []).append(args.timing_insight.strip())
+    if args.differentiation_insight:
+        plan.setdefault("differentiation_insights", []).append(args.differentiation_insight.strip())
+    if args.monetization_insight:
+        plan.setdefault("monetization_insights", []).append(args.monetization_insight.strip())
+    if args.constraint_insight:
+        plan.setdefault("constraint_insights", []).append(args.constraint_insight.strip())
+    if args.risk_signal_insight:
+        plan.setdefault("risk_signal_insights", []).append(args.risk_signal_insight.strip())
+    if args.evolution_insight:
+        plan.setdefault("evolution_insights", []).append(args.evolution_insight.strip())
 
     save_plan(plan)
     append_jsonl(EVENTS_PATH, {"ts": now_iso(), "type": "replan", "source": "cmd_replan", "evidence": args.evidence or ""})
@@ -516,6 +595,21 @@ def cmd_show(_: argparse.Namespace) -> None:
     print(f"Plan Ratio: {ratio}")
     print(f"References: {len(plan.get('references', []))}")
     print(f"Insights: {len(plan.get('insights', []))}")
+    covered = sum(
+        1
+        for key in [
+            "direction_insights",
+            "market_insights",
+            "timing_insights",
+            "differentiation_insights",
+            "monetization_insights",
+            "constraint_insights",
+            "risk_signal_insights",
+            "evolution_insights",
+        ]
+        if non_empty(plan.get(key))
+    )
+    print(f"Insight Axes Covered: {covered}/8")
     print(f"Risks: {len(plan.get('risks', []))}")
 
 
@@ -596,6 +690,14 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--execution-tasks", type=str, default="")
     s.add_argument("--references", type=str, default="")
     s.add_argument("--insights", type=str, default="")
+    s.add_argument("--direction-insights", type=str, default="")
+    s.add_argument("--market-insights", type=str, default="")
+    s.add_argument("--timing-insights", type=str, default="")
+    s.add_argument("--differentiation-insights", type=str, default="")
+    s.add_argument("--monetization-insights", type=str, default="")
+    s.add_argument("--constraint-insights", type=str, default="")
+    s.add_argument("--risk-signal-insights", type=str, default="")
+    s.add_argument("--evolution-insights", type=str, default="")
     s.add_argument("--dependencies", type=str, default="")
     s.add_argument("--experiments", type=str, default="")
     s.add_argument("--definition-of-done", type=str, default="")
@@ -607,6 +709,14 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--execution-task", type=str, default="")
     s.add_argument("--reference", type=str, default="")
     s.add_argument("--insight", type=str, default="")
+    s.add_argument("--direction-insight", type=str, default="")
+    s.add_argument("--market-insight", type=str, default="")
+    s.add_argument("--timing-insight", type=str, default="")
+    s.add_argument("--differentiation-insight", type=str, default="")
+    s.add_argument("--monetization-insight", type=str, default="")
+    s.add_argument("--constraint-insight", type=str, default="")
+    s.add_argument("--risk-signal-insight", type=str, default="")
+    s.add_argument("--evolution-insight", type=str, default="")
     s.set_defaults(func=cmd_replan)
 
     s = sub.add_parser("decide")
