@@ -1,12 +1,12 @@
 # DeepPlan (MVP)
 
-DeepPlan is a local, agent-friendly planning engine focused on one thing:
-make planning quality a first-class product surface.
+DeepPlan is a local, agent-friendly **Plan Intelligence** engine.
+It focuses on one thing: making planning quality the core value.
 
 ## Why DeepPlan
 
 Most AI products are excellent at `task -> implement`.
-DeepPlan focuses on the layer before that:
+DeepPlan intentionally focuses on the only layer before that:
 
 - what to build
 - why now
@@ -15,11 +15,12 @@ DeepPlan focuses on the layer before that:
 
 `Plan` is not prompt preparation.
 `Plan` is the business and product decision layer.
+DeepPlan is `Plan-only` by design.
 
 ## Product Thesis
 
-In the AI era, implementation speed is no longer the main bottleneck.
-Direction quality is.
+In the AI era, execution is increasingly commoditized.
+Direction quality is not.
 
 If planning is weak, faster execution only accelerates the wrong path.
 DeepPlan exists to reduce that failure mode.
@@ -56,13 +57,31 @@ For zero-idea users, DeepPlan should produce these quickly:
 2. Three direction options with one explicit choice
 3. A testable initial plan (metric, deadline, first tasks)
 
-## Core Loop
+## Product Boundary
 
-DeepPlan uses the full loop:
+DeepPlan handles:
 
-`plan -> task -> implement -> verify -> replan`
+- idea discovery
+- direction setting
+- planning logic
+- success/failure criteria definition
 
-But it treats `plan` as the highest-leverage stage, not a formality.
+DeepPlan does not handle:
+
+- task execution orchestration
+- implementation workflows
+- post-task delivery automation
+
+Those layers are already saturated by other AI tools.
+DeepPlan is the layer that decides what deserves execution.
+
+## Value Thesis
+
+In this thesis:
+
+- `Plan` is where strategic value and monetization leverage live
+- `Task+` layers are increasingly low-differentiation
+- future advantage comes from building better plans, not faster generic execution
 
 ## What It Provides
 
@@ -70,6 +89,21 @@ But it treats `plan` as the highest-leverage stage, not a formality.
 - CLI (`deepplan.py`)
 - Automatic quality checks on `plan` and `replan`
 - Local state in `/.deeplan/`
+
+## Messaging Drafts
+
+### Slogans
+
+1. Plan is the product.
+2. Decide what matters before AI builds it.
+3. In the AI era, direction is alpha.
+
+### Landing Copy (Short)
+
+DeepPlan is a Plan Intelligence tool for the AI era.
+Execution is cheap. Direction is expensive.
+When you do not know what to build yet, DeepPlan helps you turn ambiguity
+into a focused, testable, monetizable plan.
 
 ## Quick Start
 
