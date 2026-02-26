@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://deepplan.local/schemas/plan.schema.json",
+  "title": "DeepPlan",
+  "type": "object",
+  "required": [
+    "version",
+    "updated_at",
+    "goal",
+    "success_metric",
+    "deadline",
+    "constraints",
+    "assumptions",
+    "options",
+    "selected_option",
+    "tasks",
+    "dependencies",
+    "experiments",
+    "risks",
+    "definition_of_done",
+    "evidence"
+  ],
+  "properties": {
+    "version": {
+      "type": "string"
+    },
+    "updated_at": {
+      "type": "string"
+    },
+    "goal": {
+      "type": "string"
+    },
+    "success_metric": {
+      "type": "string"
+    },
+    "deadline": {
+      "type": "string"
+    },
+    "constraints": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "assumptions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "options": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "selected_option": {
+      "type": "string"
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "experiments": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "risks": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "required": [
+              "risk",
+              "signal",
+              "mitigation"
+            ],
+            "properties": {
+              "risk": {
+                "type": "string"
+              },
+              "signal": {
+                "type": "string"
+              },
+              "mitigation": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": true
+          }
+        ]
+      }
+    },
+    "definition_of_done": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": true
+}
