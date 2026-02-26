@@ -9,6 +9,9 @@
     "goal",
     "success_metric",
     "deadline",
+    "planning_horizon",
+    "review_cadence",
+    "phase_plan",
     "constraints",
     "assumptions",
     "options",
@@ -46,6 +49,18 @@
     },
     "deadline": {
       "type": "string"
+    },
+    "planning_horizon": {
+      "type": "string"
+    },
+    "review_cadence": {
+      "type": "string"
+    },
+    "phase_plan": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     },
     "constraints": {
       "type": "array",

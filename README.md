@@ -105,6 +105,14 @@ DeepPlan maps planning insight into eight required axes:
 
 `qa` checks whether all 8 axes are covered.
 
+## Horizon Fields
+
+Long-horizon planning is first-class in DeepPlan:
+
+- `planning_horizon` (for example: `12 weeks`, `6 months`)
+- `review_cadence` (for example: `weekly`, `biweekly`)
+- `phase_plan` (milestone phases across the horizon)
+
 ## Messaging Drafts
 
 ### Slogans
@@ -129,6 +137,9 @@ python3 deepplan.py plan \
   --goal "Ship DeepPlan MVP CLI" \
   --success-metric "CLI supports plan/replan/decide/risk by 2026-03-15" \
   --deadline "2026-03-15" \
+  --planning-horizon "12 weeks" \
+  --review-cadence "weekly" \
+  --phase-plan "phase1 framing,phase2 validation,phase3 refinement" \
   --constraints "single developer, local repo only" \
   --direction-insights "Why this initiative matters now" \
   --market-insights "Who has the strongest pain and why" \
@@ -139,6 +150,7 @@ python3 deepplan.py plan \
   --risk-signal-insights "Earliest failure signal and response" \
   --evolution-insights "How the plan evolves weekly"
 python3 deepplan.py qa
+python3 deepplan.py insight --topic "AI planning co-work" --references "success:linear,fail:overbuild,counter:no-code tools" --apply
 python3 deepplan.py show
 ```
 
@@ -152,6 +164,7 @@ python3 deepplan.py show
 - `qa`: run QA checks manually
 - `show`: print current plan summary
 - `ideate`: generate plan ideas from lightweight user context and optionally apply one
+- `insight`: generate viewpoint-expansion insight pack and optionally apply it
 
 ## Slash Command Mapping
 

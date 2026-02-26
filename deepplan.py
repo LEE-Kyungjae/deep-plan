@@ -30,11 +30,14 @@ def ensure_state() -> None:
 
 def default_plan() -> Dict:
     return {
-        "version": "0.3.0",
+        "version": "0.4.0",
         "updated_at": now_iso(),
         "goal": "",
         "success_metric": "",
         "deadline": "",
+        "planning_horizon": "",
+        "review_cadence": "",
+        "phase_plan": [],
         "constraints": [],
         "assumptions": [],
         "options": [],
@@ -68,11 +71,14 @@ def migrate_plan(plan: Dict) -> Dict:
     plan.pop("tasks", None)
 
     for key, default in [
-        ("version", "0.3.0"),
+        ("version", "0.4.0"),
         ("updated_at", now_iso()),
         ("goal", ""),
         ("success_metric", ""),
         ("deadline", ""),
+        ("planning_horizon", ""),
+        ("review_cadence", ""),
+        ("phase_plan", []),
         ("constraints", []),
         ("assumptions", []),
         ("options", []),
@@ -97,7 +103,7 @@ def migrate_plan(plan: Dict) -> Dict:
     ]:
         plan.setdefault(key, default)
 
-    plan["version"] = "0.3.0"
+    plan["version"] = "0.4.0"
     return plan
 
 
@@ -260,6 +266,10 @@ def insight_axes_covered(plan: Dict) -> bool:
     return all(non_empty(plan.get(k)) for k in axes)
 
 
+def horizon_defined(plan: Dict) -> bool:
+    return non_empty(plan.get("planning_horizon")) and non_empty(plan.get("review_cadence"))
+
+
 @dataclass
 class CheckResult:
     name: str
@@ -310,13 +320,14 @@ def run_qa(plan: Dict) -> Tuple[int, List[CheckResult], bool]:
     )
     checks.append(
         CheckResult(
-            "plan_execution_balance",
-            task_balance_ok(plan),
-            "Plan/Execution task split is balanced near 50:50 (40-60% range).",
+            "planning_horizon",
+            horizon_defined(plan),
+            "Planning horizon and review cadence are explicitly defined.",
             10,
             True,
         )
     )
+    checks.append(CheckResult("phase_plan", non_empty(plan.get("phase_plan")), "Plan includes milestone phases for long-horizon co-work.", 8))
     checks.append(
         CheckResult(
             "verification_loop",
@@ -361,16 +372,27 @@ def run_qa(plan: Dict) -> Tuple[int, List[CheckResult], bool]:
     return score, checks, critical_failure
 
 
+def qa_total_weight(checks: List[CheckResult]) -> int:
+    return sum(c.weight for c in checks)
+
+
+def qa_pass_threshold(checks: List[CheckResult]) -> int:
+    total = qa_total_weight(checks)
+    return int(total * 0.7 + 0.9999)
+
+
 def print_qa(score: int, checks: List[CheckResult], critical_failure: bool) -> None:
-    print(f"QA score: {score}/100")
+    total = qa_total_weight(checks)
+    threshold = qa_pass_threshold(checks)
+    print(f"QA score: {score}/{total}")
     for c in checks:
         icon = "PASS" if c.passed else "FAIL"
         critical = " [CRITICAL]" if c.critical else ""
         print(f"- {icon} {c.name}{critical}: {c.detail}")
     if critical_failure:
         print("Result: CRITICAL_FAILURE")
-    elif score < 70:
-        print("Result: NEEDS_REPLAN (score < 70)")
+    elif score < threshold:
+        print(f"Result: NEEDS_REPLAN (score < {threshold})")
     else:
         print("Result: PASS")
 
@@ -418,17 +440,24 @@ def auto_replan_stub(plan: Dict, checks: List[CheckResult]) -> Dict:
             plan["risk_signal_insights"] = ["Define one early failure signal and the immediate response."]
         if not plan.get("evolution_insights"):
             plan["evolution_insights"] = ["Define how the plan will be revised on a weekly or monthly cadence."]
-    if "plan_execution_balance" in failed:
-        if len(plan.get("plan_tasks", [])) == 0:
-            plan["plan_tasks"] = [
-                "Collect references and extract constraints.",
-                "Generate and compare three strategy options.",
-            ]
-        if len(plan.get("execution_tasks", [])) == 0:
-            plan["execution_tasks"] = [
-                "Implement minimal CLI flow for plan/qa/replan.",
-                "Run pilot and collect evidence against success metric.",
-            ]
+    if "planning_horizon" in failed:
+        if not plan.get("planning_horizon"):
+            plan["planning_horizon"] = "12 weeks"
+        if not plan.get("review_cadence"):
+            plan["review_cadence"] = "weekly"
+    if "phase_plan" in failed and not plan.get("phase_plan"):
+        plan["phase_plan"] = [
+            "Phase 1 (Weeks 1-2): Problem framing and reference collection.",
+            "Phase 2 (Weeks 3-6): Option testing and strategic choice.",
+            "Phase 3 (Weeks 7-12): Signal tracking and plan refinement.",
+        ]
+    if len(plan.get("plan_tasks", [])) == 0:
+        plan["plan_tasks"] = [
+            "Collect references and extract constraints.",
+            "Generate and compare three strategy options.",
+            "Define milestone review checkpoints.",
+            "Prepare next-cycle replan criteria.",
+        ]
     if "verification_loop" in failed and not plan.get("experiments"):
         plan["experiments"] = ["Run one pilot iteration and compare against success metric."]
     if "risk_coverage" in failed and not plan.get("risks"):
@@ -456,6 +485,8 @@ def cmd_plan(args: argparse.Namespace) -> None:
     plan["goal"] = args.goal or plan.get("goal", "")
     plan["success_metric"] = args.success_metric or plan.get("success_metric", "")
     plan["deadline"] = args.deadline or plan.get("deadline", "")
+    plan["planning_horizon"] = args.planning_horizon or plan.get("planning_horizon", "")
+    plan["review_cadence"] = args.review_cadence or plan.get("review_cadence", "")
 
     if args.constraints:
         plan["constraints"] = parse_csv(args.constraints)
@@ -469,6 +500,8 @@ def cmd_plan(args: argparse.Namespace) -> None:
         plan["plan_tasks"] = parse_csv(args.plan_tasks)
     if args.execution_tasks:
         plan["execution_tasks"] = parse_csv(args.execution_tasks)
+    if args.phase_plan:
+        plan["phase_plan"] = parse_csv(args.phase_plan)
     if args.references:
         plan["references"] = parse_csv(args.references)
     if args.insights:
@@ -502,7 +535,7 @@ def cmd_plan(args: argparse.Namespace) -> None:
     score, checks, critical_failure = run_qa(plan)
     print_qa(score, checks, critical_failure)
 
-    if not critical_failure and score < 70:
+    if not critical_failure and score < qa_pass_threshold(checks):
         print("Auto replan triggered.")
         plan = auto_replan_stub(plan, checks)
         save_plan(plan)
@@ -519,6 +552,8 @@ def cmd_replan(args: argparse.Namespace) -> None:
         plan.setdefault("plan_tasks", []).append(args.plan_task.strip())
     if args.execution_task:
         plan.setdefault("execution_tasks", []).append(args.execution_task.strip())
+    if args.phase:
+        plan.setdefault("phase_plan", []).append(args.phase.strip())
     if args.reference:
         plan.setdefault("references", []).append(args.reference.strip())
     if args.insight:
@@ -545,7 +580,7 @@ def cmd_replan(args: argparse.Namespace) -> None:
 
     score, checks, critical_failure = run_qa(plan)
     print_qa(score, checks, critical_failure)
-    if not critical_failure and score < 70:
+    if not critical_failure and score < qa_pass_threshold(checks):
         print("Auto replan triggered.")
         plan = auto_replan_stub(plan, checks)
         save_plan(plan)
@@ -589,7 +624,10 @@ def cmd_show(_: argparse.Namespace) -> None:
     print(f"Goal: {plan.get('goal')}")
     print(f"Success Metric: {plan.get('success_metric')}")
     print(f"Deadline: {plan.get('deadline')}")
+    print(f"Planning Horizon: {plan.get('planning_horizon')}")
+    print(f"Review Cadence: {plan.get('review_cadence')}")
     print(f"Updated: {plan.get('updated_at')}")
+    print(f"Phases: {len(plan.get('phase_plan', []))}")
     print(f"Plan Tasks: {p}")
     print(f"Execution Tasks: {e}")
     print(f"Plan Ratio: {ratio}")
@@ -611,6 +649,95 @@ def cmd_show(_: argparse.Namespace) -> None:
     )
     print(f"Insight Axes Covered: {covered}/8")
     print(f"Risks: {len(plan.get('risks', []))}")
+
+
+def cmd_insight(args: argparse.Namespace) -> None:
+    ensure_state()
+    plan = load_plan()
+    topic = args.topic.strip() if args.topic else plan.get("goal", "").strip() or "new initiative"
+    context = args.context.strip() if args.context else ""
+    references = parse_csv(args.references) if args.references else []
+
+    assumptions = [
+        f"Assumption: demand exists for '{topic}' in the selected segment.",
+        f"Assumption: timing is favorable within {plan.get('planning_horizon') or 'the current horizon'}.",
+        "Assumption: strategic differentiation can be made visible to users quickly.",
+    ]
+    viewpoints = [
+        f"Market view: Which user segment has painful, frequent demand around '{topic}'?",
+        f"Timing view: What changes in the next 3-6 months make this more or less valuable?",
+        "Monetization view: Which willingness-to-pay signal appears earliest?",
+        "Constraint view: Which hard limit (time, capital, distribution) will block momentum first?",
+        "Risk view: What early signal would prove the direction is wrong?",
+    ]
+    challenge = [
+        "Counterpoint: If users can solve this with existing tools, differentiation may be weak.",
+        "Counterpoint: If activation requires heavy behavior change, adoption may stall.",
+        "Counterpoint: If monetization depends on scale, short-horizon value may be low.",
+    ]
+    next_questions = [
+        "Which segment has the highest pain-frequency pair?",
+        "What single metric would prove direction quality in 2 weeks?",
+        "Which assumption is most expensive if wrong?",
+    ]
+
+    proposal = {
+        "direction_insights": [f"Anchor direction: '{topic}' must solve a high-frequency pain, not a nice-to-have."],
+        "market_insights": ["Prioritize one narrow segment with repeated pain and clear alternatives."],
+        "timing_insights": ["Validate why now: identify one external shift that increases urgency."],
+        "differentiation_insights": ["Define one strategic difference users can notice in the first session."],
+        "monetization_insights": ["Map user value to earliest willingness-to-pay signal."],
+        "constraint_insights": ["Explicitly cap scope by time and resources for this horizon."],
+        "risk_signal_insights": ["Define one disconfirming signal that triggers immediate replan."],
+        "evolution_insights": ["Run cadence-based replanning with evidence at each review checkpoint."],
+    }
+
+    output = {
+        "topic": topic,
+        "context": context,
+        "assumptions_to_challenge": assumptions,
+        "viewpoint_expansion": viewpoints,
+        "counter_views": challenge,
+        "next_questions": next_questions,
+        "reference_queue": references,
+        "axis_proposals": proposal,
+    }
+
+    if args.apply:
+        for key, values in proposal.items():
+            plan.setdefault(key, []).extend(values)
+        if references:
+            plan.setdefault("references", []).extend(references)
+        save_plan(plan)
+        append_jsonl(
+            EVENTS_PATH,
+            {
+                "ts": now_iso(),
+                "type": "insight_generated",
+                "source": "cmd_insight",
+                "topic": topic,
+                "applied": True,
+            },
+        )
+        print("Insight pack applied to current plan.")
+
+    if args.json:
+        print(json.dumps(output, indent=2, ensure_ascii=False))
+    else:
+        print(f"Topic: {topic}")
+        print("Viewpoint Expansion:")
+        for v in viewpoints:
+            print(f"- {v}")
+        print("Counter Views:")
+        for c in challenge:
+            print(f"- {c}")
+        print("Next Questions:")
+        for q in next_questions:
+            print(f"- {q}")
+        if references:
+            print("Reference Queue:")
+            for r in references:
+                print(f"- {r}")
 
 
 def cmd_ideate(args: argparse.Namespace) -> None:
@@ -682,12 +809,15 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--goal", type=str, default="")
     s.add_argument("--success-metric", type=str, default="")
     s.add_argument("--deadline", type=str, default="")
+    s.add_argument("--planning-horizon", type=str, default="")
+    s.add_argument("--review-cadence", type=str, default="")
     s.add_argument("--constraints", type=str, default="")
     s.add_argument("--assumptions", type=str, default="")
     s.add_argument("--options", type=str, default="")
     s.add_argument("--selected-option", type=str, default="")
     s.add_argument("--plan-tasks", type=str, default="")
     s.add_argument("--execution-tasks", type=str, default="")
+    s.add_argument("--phase-plan", type=str, default="")
     s.add_argument("--references", type=str, default="")
     s.add_argument("--insights", type=str, default="")
     s.add_argument("--direction-insights", type=str, default="")
@@ -707,6 +837,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--evidence", type=str, default="")
     s.add_argument("--plan-task", type=str, default="")
     s.add_argument("--execution-task", type=str, default="")
+    s.add_argument("--phase", type=str, default="")
     s.add_argument("--reference", type=str, default="")
     s.add_argument("--insight", type=str, default="")
     s.add_argument("--direction-insight", type=str, default="")
@@ -749,6 +880,14 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--json", action="store_true")
     s.add_argument("--apply", type=int, default=0, help="Apply selected idea index to current plan (1-based).")
     s.set_defaults(func=cmd_ideate)
+
+    s = sub.add_parser("insight")
+    s.add_argument("--topic", type=str, default="")
+    s.add_argument("--context", type=str, default="")
+    s.add_argument("--references", type=str, default="")
+    s.add_argument("--json", action="store_true")
+    s.add_argument("--apply", action="store_true")
+    s.set_defaults(func=cmd_insight)
     return p
 
 
