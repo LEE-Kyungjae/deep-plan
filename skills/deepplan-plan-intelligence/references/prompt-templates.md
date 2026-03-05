@@ -11,6 +11,8 @@ Then improve long-horizon plan quality using:
 - 8 insight axes coverage
 Generate and apply an insight pack if needed:
 `python3 deepplan.py insight --topic "<topic>" --references "<r1,r2,r3>" --apply`
+Close each cycle with:
+`python3 deepplan.py review --period "<week-or-month>" --signals "<s1,s2>" --apply`
 Return only planning summary, risk signals, and next planning questions.
 
 ## Claude Prompt
@@ -19,4 +21,5 @@ Use `$deepplan-plan-intelligence` for planning only.
 Do not provide implementation steps.
 Start with `show` and `qa`, then improve plan quality and long-horizon structure.
 If insight depth is low, run the insight command and apply results.
+Then run cycle review with period and signals to produce replan questions.
 Finish with: direction statement, horizon/cadence, top risks, and unresolved planning questions.

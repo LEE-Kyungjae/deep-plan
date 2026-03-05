@@ -68,6 +68,13 @@ python3 deepplan.py insight \
 - Horizon and review cadence
 - 1-3 next planning questions (not implementation tasks)
 
+6. Cycle review for long-term co-work
+- Run:
+```bash
+python3 deepplan.py review --period "<week-or-month>" --signals "<s1,s2>" --apply
+```
+- Use output recommendations and next questions to decide the next planning cycle.
+
 ## Command Reference
 
 - Baseline: `python3 deepplan.py show && python3 deepplan.py qa`
@@ -75,6 +82,7 @@ python3 deepplan.py insight \
 - Plan update: `python3 deepplan.py plan --goal "<goal>" --success-metric "<metric>" --deadline "YYYY-MM-DD"`
 - Insight pack: `python3 deepplan.py insight --topic "<topic>" --references "<r1,r2,r3>" --apply`
 - Replan update: `python3 deepplan.py replan --evidence "<evidence>" --direction-insight "<insight>"`
+- Cycle review: `python3 deepplan.py review --period "<cycle>" --signals "<s1,s2>" --apply`
 
 See [references/prompt-templates.md](references/prompt-templates.md) for ready-to-use invocation prompts.
 
