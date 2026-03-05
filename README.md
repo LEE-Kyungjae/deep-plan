@@ -151,6 +151,7 @@ python3 deepplan.py plan \
   --evolution-insights "How the plan evolves weekly"
 python3 deepplan.py qa
 python3 deepplan.py insight --topic "AI planning co-work" --references "success:linear,fail:overbuild,counter:no-code tools" --apply
+python3 deepplan.py review --period "week-1" --signals "low-activation,weak-retention" --apply
 python3 deepplan.py show
 ```
 
@@ -165,6 +166,7 @@ python3 deepplan.py show
 - `show`: print current plan summary
 - `ideate`: generate plan ideas from lightweight user context and optionally apply one
 - `insight`: generate viewpoint-expansion insight pack and optionally apply it
+- `review`: run cycle-based planning review with recommendations and next questions
 
 ## Slash Command Mapping
 

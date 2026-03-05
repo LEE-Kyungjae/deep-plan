@@ -740,6 +740,118 @@ def cmd_insight(args: argparse.Namespace) -> None:
                 print(f"- {r}")
 
 
+def missing_insight_axes(plan: Dict) -> List[str]:
+    axis_map = {
+        "direction_insights": "direction",
+        "market_insights": "market",
+        "timing_insights": "timing",
+        "differentiation_insights": "differentiation",
+        "monetization_insights": "monetization",
+        "constraint_insights": "constraints",
+        "risk_signal_insights": "risk-signals",
+        "evolution_insights": "evolution",
+    }
+    return [label for key, label in axis_map.items() if not non_empty(plan.get(key))]
+
+
+def cmd_review(args: argparse.Namespace) -> None:
+    ensure_state()
+    plan = load_plan()
+    score, checks, critical_failure = run_qa(plan)
+    total = qa_total_weight(checks)
+    threshold = qa_pass_threshold(checks)
+
+    missing_axes = missing_insight_axes(plan)
+    has_horizon = horizon_defined(plan)
+    has_phases = non_empty(plan.get("phase_plan"))
+    period = args.period.strip() if args.period else "current cycle"
+    notes = args.notes.strip() if args.notes else ""
+    signals = parse_csv(args.signals) if args.signals else []
+
+    next_questions: List[str] = []
+    if missing_axes:
+        next_questions.append(f"Which evidence can fill missing insight axes first: {', '.join(missing_axes)}?")
+    if not has_horizon:
+        next_questions.append("What planning horizon and review cadence are realistic for this initiative?")
+    if not has_phases:
+        next_questions.append("What 3-phase milestone structure should guide the next horizon?")
+    if not signals:
+        next_questions.append("What early risk signal should be tracked in the next review cycle?")
+    next_questions.extend(
+        [
+            "Which assumption became stronger or weaker since last review?",
+            "What should be explicitly deprioritized in the next cycle?",
+        ]
+    )
+
+    recommendations: List[str] = []
+    if score < threshold or critical_failure:
+        recommendations.append("Strengthen plan quality to pass QA before expanding scope.")
+    if missing_axes:
+        recommendations.append("Generate and apply insight pack for missing axes.")
+    if not has_horizon:
+        recommendations.append("Set planning horizon and review cadence explicitly.")
+    if not has_phases:
+        recommendations.append("Define phase milestones for the active horizon.")
+    if signals:
+        recommendations.append(f"Review incoming signals and decide replan trigger: {', '.join(signals)}.")
+
+    report = {
+        "period": period,
+        "score": score,
+        "score_total": total,
+        "pass_threshold": threshold,
+        "critical_failure": critical_failure,
+        "missing_insight_axes": missing_axes,
+        "horizon_defined": has_horizon,
+        "phase_plan_defined": has_phases,
+        "signals": signals,
+        "notes": notes,
+        "recommendations": recommendations,
+        "next_questions": next_questions[:5],
+    }
+
+    if args.apply:
+        cycle_note = f"[review:{period}] score={score}/{total}; missing_axes={','.join(missing_axes) if missing_axes else 'none'}"
+        plan.setdefault("evidence", []).append(cycle_note)
+        plan.setdefault("evolution_insights", []).append(
+            f"Review outcome for {period}: prioritize {missing_axes[0] if missing_axes else 'quality maintenance'}."
+        )
+        save_plan(plan)
+        append_jsonl(
+            EVENTS_PATH,
+            {
+                "ts": now_iso(),
+                "type": "review",
+                "source": "cmd_review",
+                "period": period,
+                "score": score,
+                "critical_failure": critical_failure,
+            },
+        )
+        report["applied"] = True
+
+    if args.json:
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+    else:
+        print(f"Review Period: {period}")
+        print(f"QA: {score}/{total} (threshold: {threshold})")
+        print(f"Critical Failure: {'yes' if critical_failure else 'no'}")
+        print(f"Missing Insight Axes: {', '.join(missing_axes) if missing_axes else 'none'}")
+        print(f"Horizon Defined: {'yes' if has_horizon else 'no'}")
+        print(f"Phase Plan Defined: {'yes' if has_phases else 'no'}")
+        if signals:
+            print(f"Signals: {', '.join(signals)}")
+        if notes:
+            print(f"Notes: {notes}")
+        print("Recommendations:")
+        for r in recommendations:
+            print(f"- {r}")
+        print("Next Planning Questions:")
+        for q in next_questions[:5]:
+            print(f"- {q}")
+
+
 def cmd_ideate(args: argparse.Namespace) -> None:
     ensure_state()
     ideas = generate_ideas(args)
@@ -888,6 +1000,14 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--json", action="store_true")
     s.add_argument("--apply", action="store_true")
     s.set_defaults(func=cmd_insight)
+
+    s = sub.add_parser("review")
+    s.add_argument("--period", type=str, default="")
+    s.add_argument("--signals", type=str, default="")
+    s.add_argument("--notes", type=str, default="")
+    s.add_argument("--json", action="store_true")
+    s.add_argument("--apply", action="store_true")
+    s.set_defaults(func=cmd_review)
     return p
 
 
