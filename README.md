@@ -90,6 +90,17 @@ In this thesis:
 - Automatic quality checks on `plan` and `replan`
 - Local state in `/.deeplan/`
 
+## Evidence + Hypothesis Loop
+
+DeepPlan now supports evidence-backed planning and hypothesis tracking:
+
+- `evidence` accepts structured objects (`claim`, `source`, `confidence`, `axis`, `date`)
+- `hypothesis_log` tracks testable hypotheses over time (`open/validated/invalidated/pivoted`)
+- QA includes weighted quality checks:
+  - insight quality weighted by depth + axis-linked evidence
+  - evidence quality (quantity, confidence, source diversity)
+  - hypothesis loop coverage
+
 ## Insight Axes (Long-Horizon Planning)
 
 DeepPlan maps planning insight into eight required axes:
@@ -150,6 +161,8 @@ python3 deepplan.py plan \
   --risk-signal-insights "Earliest failure signal and response" \
   --evolution-insights "How the plan evolves weekly"
 python3 deepplan.py qa
+python3 deepplan.py evidence --claim "Segment shows repeated pain" --source "interview-notes" --confidence 70 --axis market
+python3 deepplan.py hypothesis --hypothesis "Narrow segment will adopt weekly" --metric "weekly-active-pilot-users" --target ">=20" --window "14 days" --status open
 python3 deepplan.py insight --topic "AI planning co-work" --references "success:linear,fail:overbuild,counter:no-code tools" --apply
 python3 deepplan.py review --period "week-1" --signals "low-activation,weak-retention" --apply
 python3 deepplan.py show
@@ -167,6 +180,8 @@ python3 deepplan.py show
 - `ideate`: generate plan ideas from lightweight user context and optionally apply one
 - `insight`: generate viewpoint-expansion insight pack and optionally apply it
 - `review`: run cycle-based planning review with recommendations and next questions
+- `evidence`: add structured evidence linked to planning axes
+- `hypothesis`: append testable hypothesis entries and optional test evidence
 
 ## Slash Command Mapping
 

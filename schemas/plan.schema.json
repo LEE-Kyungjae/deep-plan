@@ -32,7 +32,8 @@
     "risk_signal_insights",
     "evolution_insights",
     "definition_of_done",
-    "evidence"
+    "evidence",
+    "hypothesis_log"
   ],
   "properties": {
     "version": {
@@ -206,7 +207,81 @@
     "evidence": {
       "type": "array",
       "items": {
-        "type": "string"
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "required": [
+              "claim",
+              "source",
+              "confidence",
+              "date"
+            ],
+            "properties": {
+              "claim": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string"
+              },
+              "confidence": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "axis": {
+                "type": "string"
+              },
+              "date": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": true
+          }
+        ]
+      }
+    },
+    "hypothesis_log": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "ts",
+          "hypothesis",
+          "status"
+        ],
+        "properties": {
+          "ts": {
+            "type": "string"
+          },
+          "hypothesis": {
+            "type": "string"
+          },
+          "metric": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "window": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "validated",
+              "invalidated",
+              "pivoted"
+            ]
+          },
+          "outcome": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
       }
     }
   },

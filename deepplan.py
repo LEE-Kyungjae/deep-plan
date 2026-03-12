@@ -30,7 +30,7 @@ def ensure_state() -> None:
 
 def default_plan() -> Dict:
     return {
-        "version": "0.4.0",
+        "version": "0.5.0",
         "updated_at": now_iso(),
         "goal": "",
         "success_metric": "",
@@ -59,6 +59,7 @@ def default_plan() -> Dict:
         "evolution_insights": [],
         "definition_of_done": [],
         "evidence": [],
+        "hypothesis_log": [],
     }
 
 
@@ -71,7 +72,7 @@ def migrate_plan(plan: Dict) -> Dict:
     plan.pop("tasks", None)
 
     for key, default in [
-        ("version", "0.4.0"),
+        ("version", "0.5.0"),
         ("updated_at", now_iso()),
         ("goal", ""),
         ("success_metric", ""),
@@ -100,10 +101,11 @@ def migrate_plan(plan: Dict) -> Dict:
         ("evolution_insights", []),
         ("definition_of_done", []),
         ("evidence", []),
+        ("hypothesis_log", []),
     ]:
         plan.setdefault(key, default)
 
-    plan["version"] = "0.4.0"
+    plan["version"] = "0.5.0"
     return plan
 
 
@@ -139,6 +141,46 @@ def non_empty(v) -> bool:
 
 def parse_csv(v: str) -> List[str]:
     return [x.strip() for x in v.split(",") if x.strip()]
+
+
+def normalize_axis_label(v: str) -> str:
+    aliases = {
+        "direction": "direction_insights",
+        "market": "market_insights",
+        "timing": "timing_insights",
+        "differentiation": "differentiation_insights",
+        "monetization": "monetization_insights",
+        "constraints": "constraint_insights",
+        "constraint": "constraint_insights",
+        "risk-signals": "risk_signal_insights",
+        "risk_signal": "risk_signal_insights",
+        "risk": "risk_signal_insights",
+        "evolution": "evolution_insights",
+    }
+    value = v.strip().lower()
+    return aliases.get(value, value)
+
+
+def evidence_object(claim: str, source: str, confidence: int, axis: str = "", evidence_date: str = "") -> Dict:
+    return {
+        "claim": claim.strip(),
+        "source": source.strip() if source else "manual",
+        "confidence": max(0, min(100, confidence)),
+        "axis": normalize_axis_label(axis) if axis else "",
+        "date": evidence_date.strip() if evidence_date else date.today().isoformat(),
+    }
+
+
+def evidence_objects(plan: Dict) -> List[Dict]:
+    items = []
+    for x in plan.get("evidence", []):
+        if isinstance(x, dict):
+            items.append(x)
+    return items
+
+
+def add_evidence(plan: Dict, claim: str, source: str, confidence: int = 60, axis: str = "", evidence_date: str = "") -> None:
+    plan.setdefault("evidence", []).append(evidence_object(claim, source, confidence, axis, evidence_date))
 
 
 def default_deadline(days: int = 14) -> str:
@@ -266,6 +308,49 @@ def insight_axes_covered(plan: Dict) -> bool:
     return all(non_empty(plan.get(k)) for k in axes)
 
 
+def axis_quality(plan: Dict, axis_key: str) -> float:
+    insight_count = len(plan.get(axis_key, []))
+    insight_component = min(insight_count, 3) / 3.0
+    linked_evidence = any(
+        isinstance(ev, dict) and normalize_axis_label(str(ev.get("axis", ""))) == axis_key
+        for ev in evidence_objects(plan)
+    )
+    evidence_component = 1.0 if linked_evidence else 0.0
+    return min(1.0, insight_component * 0.7 + evidence_component * 0.3)
+
+
+def weighted_insight_quality(plan: Dict) -> float:
+    axes = [
+        "direction_insights",
+        "market_insights",
+        "timing_insights",
+        "differentiation_insights",
+        "monetization_insights",
+        "constraint_insights",
+        "risk_signal_insights",
+        "evolution_insights",
+    ]
+    if not axes:
+        return 0.0
+    return sum(axis_quality(plan, k) for k in axes) / len(axes)
+
+
+def evidence_quality_ok(plan: Dict) -> bool:
+    ev = evidence_objects(plan)
+    if len(ev) < 3:
+        return False
+    high_conf = sum(1 for x in ev if int(x.get("confidence", 0)) >= 60)
+    sources = {str(x.get("source", "")).strip() for x in ev if str(x.get("source", "")).strip()}
+    return high_conf >= 2 and len(sources) >= 2
+
+
+def hypothesis_loop_ok(plan: Dict) -> bool:
+    logs = plan.get("hypothesis_log", [])
+    if not isinstance(logs, list) or len(logs) == 0:
+        return False
+    return all(isinstance(item, dict) and non_empty(item.get("hypothesis")) for item in logs)
+
+
 def horizon_defined(plan: Dict) -> bool:
     return non_empty(plan.get("planning_horizon")) and non_empty(plan.get("review_cadence"))
 
@@ -320,6 +405,23 @@ def run_qa(plan: Dict) -> Tuple[int, List[CheckResult], bool]:
     )
     checks.append(
         CheckResult(
+            "insight_quality_weighted",
+            weighted_insight_quality(plan) >= 0.6,
+            "Weighted insight quality (insight depth + axis-linked evidence) is at least 0.6.",
+            12,
+            True,
+        )
+    )
+    checks.append(
+        CheckResult(
+            "evidence_quality",
+            evidence_quality_ok(plan),
+            "Evidence includes minimum quantity, confidence, and source diversity.",
+            10,
+        )
+    )
+    checks.append(
+        CheckResult(
             "planning_horizon",
             horizon_defined(plan),
             "Planning horizon and review cadence are explicitly defined.",
@@ -336,6 +438,7 @@ def run_qa(plan: Dict) -> Tuple[int, List[CheckResult], bool]:
             8,
         )
     )
+    checks.append(CheckResult("hypothesis_loop", hypothesis_loop_ok(plan), "Hypothesis log exists with testable hypotheses.", 8))
     checks.append(
         CheckResult(
             "risk_coverage",
@@ -460,6 +563,22 @@ def auto_replan_stub(plan: Dict, checks: List[CheckResult]) -> Dict:
         ]
     if "verification_loop" in failed and not plan.get("experiments"):
         plan["experiments"] = ["Run one pilot iteration and compare against success metric."]
+    if "evidence_quality" in failed and len(evidence_objects(plan)) < 3:
+        add_evidence(plan, "Primary user pain appears frequently.", "interview-notes", 65, "market_insights")
+        add_evidence(plan, "Current alternatives fail to solve core workflow.", "competitor-review", 70, "differentiation_insights")
+        add_evidence(plan, "Users show willingness to pay for time savings.", "pricing-survey", 60, "monetization_insights")
+    if "hypothesis_loop" in failed and not plan.get("hypothesis_log"):
+        plan["hypothesis_log"] = [
+            {
+                "ts": now_iso(),
+                "hypothesis": "A narrow segment has painful repeated need for this solution.",
+                "metric": "weekly-active-pilot-users",
+                "target": ">= 20",
+                "window": "14 days",
+                "status": "open",
+                "outcome": "",
+            }
+        ]
     if "risk_coverage" in failed and not plan.get("risks"):
         plan["risks"] = [
             {
@@ -547,7 +666,14 @@ def cmd_plan(args: argparse.Namespace) -> None:
 def cmd_replan(args: argparse.Namespace) -> None:
     plan = load_plan()
     if args.evidence:
-        plan.setdefault("evidence", []).append(args.evidence.strip())
+        add_evidence(
+            plan,
+            args.evidence.strip(),
+            args.evidence_source or "replan",
+            args.evidence_confidence,
+            args.evidence_axis or "",
+            args.evidence_date or "",
+        )
     if args.plan_task:
         plan.setdefault("plan_tasks", []).append(args.plan_task.strip())
     if args.execution_task:
@@ -609,6 +735,61 @@ def cmd_risk(args: argparse.Namespace) -> None:
     print("Risk recorded.")
 
 
+def cmd_evidence(args: argparse.Namespace) -> None:
+    plan = load_plan()
+    add_evidence(
+        plan,
+        args.claim.strip(),
+        args.source.strip() if args.source else "manual",
+        args.confidence,
+        args.axis or "",
+        args.date or "",
+    )
+    if args.reference:
+        plan.setdefault("references", []).append(args.reference.strip())
+    save_plan(plan)
+    append_jsonl(
+        EVENTS_PATH,
+        {
+            "ts": now_iso(),
+            "type": "evidence_added",
+            "source": "cmd_evidence",
+            "claim": args.claim.strip(),
+            "axis": normalize_axis_label(args.axis) if args.axis else "",
+            "confidence": args.confidence,
+        },
+    )
+    print("Evidence recorded.")
+
+
+def cmd_hypothesis(args: argparse.Namespace) -> None:
+    plan = load_plan()
+    payload = {
+        "ts": now_iso(),
+        "hypothesis": args.hypothesis.strip(),
+        "metric": args.metric.strip() if args.metric else "",
+        "target": args.target.strip() if args.target else "",
+        "window": args.window.strip() if args.window else "",
+        "status": args.status,
+        "outcome": args.outcome.strip() if args.outcome else "",
+    }
+    plan.setdefault("hypothesis_log", []).append(payload)
+    if args.evidence:
+        add_evidence(plan, args.evidence.strip(), "hypothesis-test", args.confidence, args.axis or "", args.date or "")
+    save_plan(plan)
+    append_jsonl(
+        EVENTS_PATH,
+        {
+            "ts": now_iso(),
+            "type": "hypothesis_added",
+            "source": "cmd_hypothesis",
+            "status": args.status,
+            "hypothesis": args.hypothesis.strip(),
+        },
+    )
+    print("Hypothesis recorded.")
+
+
 def cmd_qa(_: argparse.Namespace) -> None:
     plan = load_plan()
     score, checks, critical_failure = run_qa(plan)
@@ -648,6 +829,9 @@ def cmd_show(_: argparse.Namespace) -> None:
         if non_empty(plan.get(key))
     )
     print(f"Insight Axes Covered: {covered}/8")
+    print(f"Insight Quality (weighted): {weighted_insight_quality(plan):.2f}")
+    print(f"Evidence Items: {len(evidence_objects(plan))}")
+    print(f"Hypotheses: {len(plan.get('hypothesis_log', []))}")
     print(f"Risks: {len(plan.get('risks', []))}")
 
 
@@ -708,6 +892,8 @@ def cmd_insight(args: argparse.Namespace) -> None:
             plan.setdefault(key, []).extend(values)
         if references:
             plan.setdefault("references", []).extend(references)
+            for ref in references[:3]:
+                add_evidence(plan, f"Reference captured for topic '{topic}'.", ref, 60, "market_insights")
         save_plan(plan)
         append_jsonl(
             EVENTS_PATH,
@@ -777,6 +963,8 @@ def cmd_review(args: argparse.Namespace) -> None:
         next_questions.append("What 3-phase milestone structure should guide the next horizon?")
     if not signals:
         next_questions.append("What early risk signal should be tracked in the next review cycle?")
+    if not hypothesis_loop_ok(plan):
+        next_questions.append("What testable hypothesis should be added for the next cycle?")
     next_questions.extend(
         [
             "Which assumption became stronger or weaker since last review?",
@@ -793,6 +981,8 @@ def cmd_review(args: argparse.Namespace) -> None:
         recommendations.append("Set planning horizon and review cadence explicitly.")
     if not has_phases:
         recommendations.append("Define phase milestones for the active horizon.")
+    if not hypothesis_loop_ok(plan):
+        recommendations.append("Add hypothesis entries with metric/target/window and update status each cycle.")
     if signals:
         recommendations.append(f"Review incoming signals and decide replan trigger: {', '.join(signals)}.")
 
@@ -813,7 +1003,7 @@ def cmd_review(args: argparse.Namespace) -> None:
 
     if args.apply:
         cycle_note = f"[review:{period}] score={score}/{total}; missing_axes={','.join(missing_axes) if missing_axes else 'none'}"
-        plan.setdefault("evidence", []).append(cycle_note)
+        add_evidence(plan, cycle_note, "review-cycle", 70, "evolution_insights")
         plan.setdefault("evolution_insights", []).append(
             f"Review outcome for {period}: prioritize {missing_axes[0] if missing_axes else 'quality maintenance'}."
         )
@@ -947,6 +1137,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("replan")
     s.add_argument("--evidence", type=str, default="")
+    s.add_argument("--evidence-source", type=str, default="")
+    s.add_argument("--evidence-confidence", type=int, default=60)
+    s.add_argument("--evidence-axis", type=str, default="")
+    s.add_argument("--evidence-date", type=str, default="")
     s.add_argument("--plan-task", type=str, default="")
     s.add_argument("--execution-task", type=str, default="")
     s.add_argument("--phase", type=str, default="")
@@ -974,6 +1168,28 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--signal", type=str, required=True)
     s.add_argument("--mitigation", type=str, required=True)
     s.set_defaults(func=cmd_risk)
+
+    s = sub.add_parser("evidence")
+    s.add_argument("--claim", type=str, required=True)
+    s.add_argument("--source", type=str, default="manual")
+    s.add_argument("--confidence", type=int, default=60)
+    s.add_argument("--axis", type=str, default="")
+    s.add_argument("--date", type=str, default="")
+    s.add_argument("--reference", type=str, default="")
+    s.set_defaults(func=cmd_evidence)
+
+    s = sub.add_parser("hypothesis")
+    s.add_argument("--hypothesis", type=str, required=True)
+    s.add_argument("--metric", type=str, default="")
+    s.add_argument("--target", type=str, default="")
+    s.add_argument("--window", type=str, default="")
+    s.add_argument("--status", choices=["open", "validated", "invalidated", "pivoted"], default="open")
+    s.add_argument("--outcome", type=str, default="")
+    s.add_argument("--evidence", type=str, default="")
+    s.add_argument("--confidence", type=int, default=60)
+    s.add_argument("--axis", type=str, default="")
+    s.add_argument("--date", type=str, default="")
+    s.set_defaults(func=cmd_hypothesis)
 
     s = sub.add_parser("qa")
     s.set_defaults(func=cmd_qa)

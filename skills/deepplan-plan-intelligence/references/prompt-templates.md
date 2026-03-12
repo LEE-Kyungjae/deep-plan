@@ -9,6 +9,9 @@ Run `python3 deepplan.py show` and `python3 deepplan.py qa` first.
 Then improve long-horizon plan quality using:
 - `planning_horizon`, `review_cadence`, `phase_plan`
 - 8 insight axes coverage
+Add structured evidence and hypothesis entries when signals are weak:
+- `python3 deepplan.py evidence --claim "<claim>" --source "<source>" --confidence 70 --axis <axis>`
+- `python3 deepplan.py hypothesis --hypothesis "<statement>" --metric "<metric>" --target "<target>" --window "<window>"`
 Generate and apply an insight pack if needed:
 `python3 deepplan.py insight --topic "<topic>" --references "<r1,r2,r3>" --apply`
 Close each cycle with:

@@ -81,6 +81,8 @@ python3 deepplan.py review --period "<week-or-month>" --signals "<s1,s2>" --appl
 - Idea generation: `python3 deepplan.py ideate --profile "<profile>" --interests "<a,b,c>" --count 5`
 - Plan update: `python3 deepplan.py plan --goal "<goal>" --success-metric "<metric>" --deadline "YYYY-MM-DD"`
 - Insight pack: `python3 deepplan.py insight --topic "<topic>" --references "<r1,r2,r3>" --apply`
+- Evidence: `python3 deepplan.py evidence --claim "<claim>" --source "<source>" --confidence 70 --axis market`
+- Hypothesis: `python3 deepplan.py hypothesis --hypothesis "<statement>" --metric "<metric>" --target "<target>" --window "<window>"`
 - Replan update: `python3 deepplan.py replan --evidence "<evidence>" --direction-insight "<insight>"`
 - Cycle review: `python3 deepplan.py review --period "<cycle>" --signals "<s1,s2>" --apply`
 
