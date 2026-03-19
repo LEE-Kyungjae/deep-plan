@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -171,11 +172,31 @@ def evidence_object(claim: str, source: str, confidence: int, axis: str = "", ev
     }
 
 
+def legacy_evidence_object(entry: str) -> Dict:
+    text = entry.strip()
+    if not text:
+        return {}
+    review_match = re.match(r"^\[review:(?P<period>[^\]]+)\]\s+score=(?P<score>\d+)/(?P<total>\d+);", text)
+    if review_match:
+        period = review_match.group("period").strip()
+        return evidence_object(
+            f"Review cycle recorded for {period}: {text}",
+            "review-cycle",
+            70,
+            "evolution_insights",
+        )
+    return {}
+
+
 def evidence_objects(plan: Dict) -> List[Dict]:
     items = []
     for x in plan.get("evidence", []):
         if isinstance(x, dict):
             items.append(x)
+        elif isinstance(x, str):
+            legacy = legacy_evidence_object(x)
+            if legacy:
+                items.append(legacy)
     return items
 
 
@@ -475,6 +496,30 @@ def run_qa(plan: Dict) -> Tuple[int, List[CheckResult], bool]:
     return score, checks, critical_failure
 
 
+def qa_report(plan: Dict) -> Dict:
+    score, checks, critical_failure = run_qa(plan)
+    total = qa_total_weight(checks)
+    threshold = qa_pass_threshold(checks)
+    result = "CRITICAL_FAILURE" if critical_failure else "PASS" if score >= threshold else "NEEDS_REPLAN"
+    return {
+        "score": score,
+        "total": total,
+        "threshold": threshold,
+        "critical_failure": critical_failure,
+        "result": result,
+        "checks": [
+            {
+                "name": c.name,
+                "passed": c.passed,
+                "detail": c.detail,
+                "weight": c.weight,
+                "critical": c.critical,
+            }
+            for c in checks
+        ],
+    }
+
+
 def qa_total_weight(checks: List[CheckResult]) -> int:
     return sum(c.weight for c in checks)
 
@@ -498,6 +543,46 @@ def print_qa(score: int, checks: List[CheckResult], critical_failure: bool) -> N
         print(f"Result: NEEDS_REPLAN (score < {threshold})")
     else:
         print("Result: PASS")
+
+
+def plan_summary(plan: Dict) -> Dict:
+    p = len(plan.get("plan_tasks", []))
+    e = len(plan.get("execution_tasks", []))
+    total = p + e
+    covered = sum(
+        1
+        for key in [
+            "direction_insights",
+            "market_insights",
+            "timing_insights",
+            "differentiation_insights",
+            "monetization_insights",
+            "constraint_insights",
+            "risk_signal_insights",
+            "evolution_insights",
+        ]
+        if non_empty(plan.get(key))
+    )
+    return {
+        "goal": plan.get("goal"),
+        "success_metric": plan.get("success_metric"),
+        "deadline": plan.get("deadline"),
+        "planning_horizon": plan.get("planning_horizon"),
+        "review_cadence": plan.get("review_cadence"),
+        "updated_at": plan.get("updated_at"),
+        "phase_count": len(plan.get("phase_plan", [])),
+        "plan_task_count": p,
+        "execution_task_count": e,
+        "plan_ratio": round((p / total * 100), 1) if total > 0 else None,
+        "reference_count": len(plan.get("references", [])),
+        "insight_count": len(plan.get("insights", [])),
+        "insight_axes_covered": covered,
+        "insight_axes_total": 8,
+        "weighted_insight_quality": round(weighted_insight_quality(plan), 2),
+        "evidence_count": len(evidence_objects(plan)),
+        "hypothesis_count": len(plan.get("hypothesis_log", [])),
+        "risk_count": len(plan.get("risks", [])),
+    }
 
 
 def auto_replan_stub(plan: Dict, checks: List[CheckResult]) -> Dict:
@@ -798,41 +883,25 @@ def cmd_qa(_: argparse.Namespace) -> None:
 
 def cmd_show(_: argparse.Namespace) -> None:
     plan = load_plan()
-    p = len(plan.get("plan_tasks", []))
-    e = len(plan.get("execution_tasks", []))
-    total = p + e
-    ratio = f"{(p / total * 100):.1f}%" if total > 0 else "n/a"
-    print(f"Goal: {plan.get('goal')}")
-    print(f"Success Metric: {plan.get('success_metric')}")
-    print(f"Deadline: {plan.get('deadline')}")
-    print(f"Planning Horizon: {plan.get('planning_horizon')}")
-    print(f"Review Cadence: {plan.get('review_cadence')}")
-    print(f"Updated: {plan.get('updated_at')}")
-    print(f"Phases: {len(plan.get('phase_plan', []))}")
-    print(f"Plan Tasks: {p}")
-    print(f"Execution Tasks: {e}")
-    print(f"Plan Ratio: {ratio}")
-    print(f"References: {len(plan.get('references', []))}")
-    print(f"Insights: {len(plan.get('insights', []))}")
-    covered = sum(
-        1
-        for key in [
-            "direction_insights",
-            "market_insights",
-            "timing_insights",
-            "differentiation_insights",
-            "monetization_insights",
-            "constraint_insights",
-            "risk_signal_insights",
-            "evolution_insights",
-        ]
-        if non_empty(plan.get(key))
-    )
-    print(f"Insight Axes Covered: {covered}/8")
-    print(f"Insight Quality (weighted): {weighted_insight_quality(plan):.2f}")
-    print(f"Evidence Items: {len(evidence_objects(plan))}")
-    print(f"Hypotheses: {len(plan.get('hypothesis_log', []))}")
-    print(f"Risks: {len(plan.get('risks', []))}")
+    summary = plan_summary(plan)
+    plan_ratio = f"{summary['plan_ratio']:.1f}%" if summary["plan_ratio"] is not None else "n/a"
+    print(f"Goal: {summary['goal']}")
+    print(f"Success Metric: {summary['success_metric']}")
+    print(f"Deadline: {summary['deadline']}")
+    print(f"Planning Horizon: {summary['planning_horizon']}")
+    print(f"Review Cadence: {summary['review_cadence']}")
+    print(f"Updated: {summary['updated_at']}")
+    print(f"Phases: {summary['phase_count']}")
+    print(f"Plan Tasks: {summary['plan_task_count']}")
+    print(f"Execution Tasks: {summary['execution_task_count']}")
+    print(f"Plan Ratio: {plan_ratio}")
+    print(f"References: {summary['reference_count']}")
+    print(f"Insights: {summary['insight_count']}")
+    print(f"Insight Axes Covered: {summary['insight_axes_covered']}/{summary['insight_axes_total']}")
+    print(f"Insight Quality (weighted): {summary['weighted_insight_quality']:.2f}")
+    print(f"Evidence Items: {summary['evidence_count']}")
+    print(f"Hypotheses: {summary['hypothesis_count']}")
+    print(f"Risks: {summary['risk_count']}")
 
 
 def cmd_insight(args: argparse.Namespace) -> None:

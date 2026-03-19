@@ -87,6 +87,7 @@ In this thesis:
 
 - Shared plan format (`schemas/plan.schema.json`)
 - CLI (`deepplan.py`)
+- Minimal local HTTP service (`deepplan_server.py`)
 - Automatic quality checks on `plan` and `replan`
 - Local state in `/.deeplan/`
 
@@ -166,6 +167,7 @@ python3 deepplan.py hypothesis --hypothesis "Narrow segment will adopt weekly" -
 python3 deepplan.py insight --topic "AI planning co-work" --references "success:linear,fail:overbuild,counter:no-code tools" --apply
 python3 deepplan.py review --period "week-1" --signals "low-activation,weak-retention" --apply
 python3 deepplan.py show
+python3 deepplan_server.py --port 8787
 ```
 
 ## Commands
@@ -182,6 +184,32 @@ python3 deepplan.py show
 - `review`: run cycle-based planning review with recommendations and next questions
 - `evidence`: add structured evidence linked to planning axes
 - `hypothesis`: append testable hypothesis entries and optional test evidence
+
+## HTTP Service
+
+DeepPlan also exposes a minimal local HTTP service without external dependencies:
+
+```bash
+python3 deepplan_server.py --host 127.0.0.1 --port 8787
+```
+
+Available endpoints:
+
+- `GET /health`: service health check
+- `GET /plan`: full current plan + derived summary
+- `GET /qa`: QA report as JSON
+- `POST /plan`: update core plan fields using a JSON object
+- `POST /evidence`: append one evidence item using JSON
+
+Example:
+
+```bash
+curl http://127.0.0.1:8787/plan
+curl http://127.0.0.1:8787/qa
+curl -X POST http://127.0.0.1:8787/evidence \
+  -H 'Content-Type: application/json' \
+  -d '{"claim":"User pain repeated in interviews","source":"interview-notes","confidence":72,"axis":"market"}'
+```
 
 ## Slash Command Mapping
 
