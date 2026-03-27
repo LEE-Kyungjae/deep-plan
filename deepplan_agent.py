@@ -18,6 +18,7 @@ from deepplan import (
     plan_summary,
     qa_autoreplan_result,
     qa_report,
+    resolve_revision_reference,
     restore_preview,
     save_validated_plan,
     storage_health_report,
@@ -95,8 +96,8 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
             "properties": {
                 "revision_id": {"type": "string"},
                 "expected_fingerprint": {"type": "string"},
+                "previous": {"type": "boolean"},
             },
-            "required": ["revision_id"],
             "additionalProperties": False,
         },
     },
@@ -107,8 +108,8 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "revision_id": {"type": "string"},
+                "previous": {"type": "boolean"},
             },
-            "required": ["revision_id"],
             "additionalProperties": False,
         },
     },
@@ -309,24 +310,32 @@ def validate_history_payload(payload: Dict[str, Any]) -> None:
 def validate_restore_payload(payload: Dict[str, Any]) -> None:
     ensure_object_payload(payload)
     validate_expected_fingerprint(payload)
-    allowed = {"revision_id", "expected_fingerprint"}
+    allowed = {"revision_id", "expected_fingerprint", "previous"}
     unknown = sorted(set(payload) - allowed)
     if unknown:
         raise ValueError(f"unknown restore_revision fields: {', '.join(unknown)}")
+    if "previous" in payload and not isinstance(payload["previous"], bool):
+        raise ValueError("previous must be a boolean")
     revision_id = payload.get("revision_id", "")
+    if "previous" in payload and payload["previous"]:
+        return
     if not isinstance(revision_id, str) or not revision_id.strip():
-        raise ValueError("revision_id is required")
+        raise ValueError("revision_id is required unless previous=true")
 
 
 def validate_preview_restore_payload(payload: Dict[str, Any]) -> None:
     ensure_object_payload(payload)
-    allowed = {"revision_id"}
+    allowed = {"revision_id", "previous"}
     unknown = sorted(set(payload) - allowed)
     if unknown:
         raise ValueError(f"unknown preview_restore fields: {', '.join(unknown)}")
+    if "previous" in payload and not isinstance(payload["previous"], bool):
+        raise ValueError("previous must be a boolean")
     revision_id = payload.get("revision_id", "")
+    if "previous" in payload and payload["previous"]:
+        return
     if not isinstance(revision_id, str) or not revision_id.strip():
-        raise ValueError("revision_id is required")
+        raise ValueError("revision_id is required unless previous=true")
 
 
 def validate_evidence_payload(payload: Dict[str, Any]) -> None:
@@ -484,7 +493,7 @@ def execute_tool(name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 
     if name == "restore_revision":
         validate_restore_payload(payload)
-        revision = get_revision(str(payload.get("revision_id", "")).strip())
+        revision = resolve_revision_reference(str(payload.get("revision_id", "")).strip(), bool(payload.get("previous", False)))
         plan = mutate_plan_state(
             lambda current_plan: (
                 current_plan.clear(),
@@ -509,7 +518,7 @@ def execute_tool(name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 
     if name == "preview_restore":
         validate_preview_restore_payload(payload)
-        return restore_preview(str(payload.get("revision_id", "")).strip())
+        return restore_preview(str(payload.get("revision_id", "")).strip(), previous=bool(payload.get("previous", False)))
 
     if name == "replan":
         validate_replan_payload(payload)
@@ -666,6 +675,8 @@ def natural_language_to_tool(text: str) -> Tuple[str, Dict[str, Any]]:
         return "get_health", {}
     if lowered.startswith("preview restore "):
         return "preview_restore", parse_assignment_tokens(shlex.split(stripped[len("preview restore ") :]))
+    if lowered == "preview previous revision":
+        return "preview_restore", {"previous": True}
     if any(phrase in lowered for phrase in ["history", "revision history", "plan history"]):
         return "get_history", {}
     if any(phrase in lowered for phrase in ["validate plan", "plan validation", "check plan structure"]):
@@ -676,6 +687,8 @@ def natural_language_to_tool(text: str) -> Tuple[str, Dict[str, Any]]:
         return "get_plan", {}
     if lowered.startswith("restore revision "):
         return "restore_revision", parse_assignment_tokens(shlex.split(stripped[len("restore revision ") :]))
+    if lowered == "restore previous revision":
+        return "restore_revision", {"previous": True}
     if lowered.startswith("add evidence "):
         return "add_evidence", parse_assignment_tokens(shlex.split(stripped[len("add evidence ") :]))
     if lowered.startswith("update plan "):

@@ -275,6 +275,35 @@ class DeepPlanServerTests(unittest.TestCase):
         self.assertEqual(payload["tool"], "preview_restore")
         self.assertIn("changed_fields", payload["result"])
 
+    def test_tools_preview_restore_accepts_previous_shortcut(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            first = build_handler(
+                "POST",
+                "/plan",
+                body=json.dumps({"goal": "server previous first"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            first.do_POST()
+            second = build_handler(
+                "POST",
+                "/plan",
+                body=json.dumps({"goal": "server previous second"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            second.do_POST()
+            handler = build_handler(
+                "POST",
+                "/tools/preview_restore",
+                body=json.dumps({"input": {"previous": True}}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            handler.do_POST()
+            status, payload, _headers = decode_response(handler)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["result"]["selected_via"], "previous")
+
 
 if __name__ == "__main__":
     unittest.main()

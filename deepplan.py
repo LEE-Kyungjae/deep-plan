@@ -645,6 +645,38 @@ def get_revision(revision_id: str) -> Dict:
     raise ValueError(f"unknown revision_id: {wanted}")
 
 
+def latest_revision() -> Optional[Dict]:
+    revisions = list_revisions(limit=1)
+    return revisions[0] if revisions else None
+
+
+def get_revision_by_fingerprint(fingerprint: str) -> Optional[Dict]:
+    wanted = fingerprint.strip()
+    if not wanted:
+        return None
+    for item in read_jsonl(REVISIONS_PATH):
+        if str(item.get("fingerprint", "")).strip() == wanted:
+            return item
+    return None
+
+
+def resolve_revision_reference(revision_id: str = "", previous: bool = False) -> Dict:
+    if previous:
+        latest = latest_revision()
+        if not latest:
+            raise ValueError("no revisions recorded")
+        previous_fingerprint = str(latest.get("previous_fingerprint", "")).strip()
+        if previous_fingerprint:
+            previous_revision = get_revision_by_fingerprint(previous_fingerprint)
+            if previous_revision:
+                return previous_revision
+        revisions = list_revisions(limit=2)
+        if len(revisions) >= 2:
+            return revisions[1]
+        raise ValueError("no previous revision available")
+    return get_revision(revision_id)
+
+
 def diff_plan_fields(current_plan: Dict, target_plan: Dict) -> List[str]:
     keys = sorted(set(current_plan) | set(target_plan))
     changed: List[str] = []
@@ -676,9 +708,9 @@ def structured_plan_diff(current_plan: Dict, target_plan: Dict) -> List[Dict]:
     return diff
 
 
-def restore_preview(revision_id: str) -> Dict:
+def restore_preview(revision_id: str = "", previous: bool = False) -> Dict:
     current_plan = load_plan()
-    revision = get_revision(revision_id)
+    revision = resolve_revision_reference(revision_id=revision_id, previous=previous)
     target_plan = json.loads(json.dumps(revision["plan"]))
     current_fingerprint = plan_fingerprint(current_plan)
     target_fingerprint = plan_fingerprint(target_plan)
@@ -686,6 +718,7 @@ def restore_preview(revision_id: str) -> Dict:
     structured_diff = structured_plan_diff(current_plan, target_plan)
     return {
         "revision_id": revision["revision_id"],
+        "selected_via": "previous" if previous else "revision_id",
         "source": revision.get("source", ""),
         "reason": revision.get("reason", ""),
         "metadata": revision.get("metadata", {}),
@@ -1850,7 +1883,7 @@ def cmd_history(args: argparse.Namespace) -> None:
 
 def cmd_restore(args: argparse.Namespace) -> None:
     if getattr(args, "preview", False):
-        preview = restore_preview(args.revision_id)
+        preview = restore_preview(getattr(args, "revision_id", ""), previous=getattr(args, "previous", False))
         if getattr(args, "json", False):
             print(json.dumps(preview, indent=2, ensure_ascii=False))
             return
@@ -1875,7 +1908,7 @@ def cmd_restore(args: argparse.Namespace) -> None:
                     print(f"- {item['field']}: {before['type']} -> {after['type']}")
         return
 
-    revision = get_revision(args.revision_id)
+    revision = resolve_revision_reference(getattr(args, "revision_id", ""), previous=getattr(args, "previous", False))
     restored = mutate_plan_state(
         lambda plan: (plan.clear(), plan.update(json.loads(json.dumps(revision["plan"])))),
         event_payloads=[
@@ -2289,7 +2322,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(func=cmd_history)
 
     s = sub.add_parser("restore")
-    s.add_argument("--revision-id", type=str, required=True)
+    s.add_argument("--revision-id", type=str, default="")
+    s.add_argument("--previous", action="store_true")
     s.add_argument("--expected-fingerprint", type=str, default="")
     s.add_argument("--preview", action="store_true")
     s.add_argument("--json", action="store_true")

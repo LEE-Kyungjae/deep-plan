@@ -60,6 +60,15 @@ class DeepPlanRegressionTests(unittest.TestCase):
         self.assertEqual(tool_name, "restore_revision")
         self.assertEqual(payload, {"revision_id": "rev-456"})
 
+    def test_natural_language_mapping_covers_previous_revision_shortcuts(self):
+        preview_tool, preview_payload = deepplan_agent.natural_language_to_tool("preview previous revision")
+        restore_tool, restore_payload = deepplan_agent.natural_language_to_tool("restore previous revision")
+
+        self.assertEqual(preview_tool, "preview_restore")
+        self.assertEqual(preview_payload, {"previous": True})
+        self.assertEqual(restore_tool, "restore_revision")
+        self.assertEqual(restore_payload, {"previous": True})
+
     def test_qa_autoreplan_upgrades_thin_plan_to_pass(self):
         plan = deepplan.default_plan()
         plan["goal"] = "Test goal"
@@ -562,6 +571,57 @@ class DeepPlanRegressionTests(unittest.TestCase):
             events = [json.loads(line) for line in deepplan.EVENTS_PATH.read_text(encoding="utf-8").splitlines() if line.strip()]
 
         self.assertTrue(any(event.get("type") == "plan_restored" and event.get("source") == "restore_revision" for event in events))
+
+    def test_restore_previous_revision_without_revision_id(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            first = deepplan_agent.execute_tool(
+                "update_plan",
+                {
+                    "goal": "previous first",
+                    "success_metric": "Reach 2 pilots",
+                    "deadline": "2026-04-03",
+                },
+            )
+            second = deepplan_agent.execute_tool(
+                "update_plan",
+                {
+                    "goal": "previous second",
+                    "expected_fingerprint": first["fingerprint"],
+                },
+            )
+            restored = deepplan_agent.execute_tool(
+                "restore_revision",
+                {
+                    "previous": True,
+                    "expected_fingerprint": second["fingerprint"],
+                },
+            )
+
+        self.assertEqual(restored["plan"]["goal"], "previous first")
+
+    def test_preview_previous_revision_without_revision_id(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            first = deepplan_agent.execute_tool(
+                "update_plan",
+                {
+                    "goal": "preview previous first",
+                    "success_metric": "Reach 2 pilots",
+                    "deadline": "2026-04-03",
+                },
+            )
+            deepplan_agent.execute_tool(
+                "update_plan",
+                {
+                    "goal": "preview previous second",
+                    "expected_fingerprint": first["fingerprint"],
+                },
+            )
+            preview = deepplan_agent.execute_tool("preview_restore", {"previous": True})
+
+        self.assertEqual(preview["selected_via"], "previous")
+        self.assertEqual(preview["metadata"]["goal"], "preview previous first")
 
     def test_storage_health_report_detects_invalid_event_lines(self):
         with DeepPlanStateIsolation():

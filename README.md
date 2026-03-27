@@ -195,6 +195,7 @@ python3 deepplan_server.py --port 8787
 - `restore`: restore the current plan from a recorded revision snapshot
   - `restore --preview`: preview changed fields and summary impact before mutation
   - restore preview now includes structured field-level diff summaries
+  - `restore --previous`: target the immediately previous revision without specifying `revision_id`
 - `ideate`: generate plan ideas from lightweight user context and optionally apply one
 - `insight`: generate viewpoint-expansion insight pack and optionally apply it
 - `review`: run cycle-based planning review with recommendations and next questions
@@ -277,6 +278,7 @@ python3 deepplan_agent.py tools
 python3 deepplan_agent.py run --input '/deepplan.show'
 python3 deepplan_agent.py run --input '/deepplan.health'
 python3 deepplan_agent.py run --input '/deepplan.restore-preview revision_id=<revision-id>'
+python3 deepplan_agent.py run --input 'preview previous revision'
 python3 deepplan_agent.py run --input '/deepplan.plan goal="Ship local agent layer" planning_horizon="4 weeks" review_cadence=weekly'
 python3 deepplan_agent.py run --input '/deepplan.replan evidence="Pilot retention improved" evidence_confidence=70 evidence_axis=market'
 python3 deepplan_agent.py run --input '/deepplan.history'
