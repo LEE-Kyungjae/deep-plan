@@ -614,6 +614,16 @@ class DeepPlanRegressionTests(unittest.TestCase):
         self.assertEqual(payload["tool"], "preview_restore")
         self.assertEqual(payload["input"], {"revision_id": "rev-789"})
 
+    def test_tool_schema_contract_report_matches_runtime_expectations(self):
+        report = deepplan_agent.tool_schema_contract_report()
+
+        self.assertTrue(report["matches"])
+        self.assertEqual(report["missing"], [])
+        self.assertEqual(report["unexpected"], [])
+        self.assertEqual(report["missing_validators"], [])
+        self.assertEqual(report["additional_properties_true"], [])
+        self.assertEqual(report["mutation_tools_missing_expected_fingerprint"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

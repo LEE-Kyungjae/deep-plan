@@ -237,6 +237,24 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
     },
 ]
 
+TOOL_VALIDATORS = {
+    "get_history": "validate_history_payload",
+    "restore_revision": "validate_restore_payload",
+    "preview_restore": "validate_preview_restore_payload",
+    "replan": "validate_replan_payload",
+    "update_plan": "validate_update_payload",
+    "add_evidence": "validate_evidence_payload",
+    "add_hypothesis": "validate_hypothesis_payload",
+}
+
+MUTATION_TOOLS = {
+    "restore_revision",
+    "replan",
+    "update_plan",
+    "add_evidence",
+    "add_hypothesis",
+}
+
 
 def ensure_object_payload(payload: Dict[str, Any]) -> None:
     if not isinstance(payload, dict):
@@ -396,6 +414,54 @@ def merge_plan_updates(plan: Dict[str, Any], payload: Dict[str, Any]) -> Dict[st
 
 def list_tools() -> List[Dict[str, Any]]:
     return TOOL_SCHEMAS
+
+
+def tool_schema_contract_report() -> Dict[str, Any]:
+    schema_names = {item["name"] for item in TOOL_SCHEMAS}
+    expected_names = {
+        "get_plan",
+        "get_qa",
+        "get_health",
+        "validate_plan",
+        "get_history",
+        "restore_revision",
+        "preview_restore",
+        "replan",
+        "update_plan",
+        "add_evidence",
+        "add_hypothesis",
+    }
+    missing = sorted(expected_names - schema_names)
+    unexpected = sorted(schema_names - expected_names)
+    missing_validators = sorted(name for name in schema_names if name in TOOL_VALIDATORS and TOOL_VALIDATORS[name] not in globals())
+    additional_properties_true = sorted(
+        item["name"]
+        for item in TOOL_SCHEMAS
+        if item.get("input_schema", {}).get("additionalProperties") is not False
+    )
+    mutation_tools_missing_expected_fingerprint = sorted(
+        item["name"]
+        for item in TOOL_SCHEMAS
+        if item["name"] in MUTATION_TOOLS
+        and "expected_fingerprint" not in item.get("input_schema", {}).get("properties", {})
+    )
+    return {
+        "matches": not any(
+            [
+                missing,
+                unexpected,
+                missing_validators,
+                additional_properties_true,
+                mutation_tools_missing_expected_fingerprint,
+            ]
+        ),
+        "tool_count": len(TOOL_SCHEMAS),
+        "missing": missing,
+        "unexpected": unexpected,
+        "missing_validators": missing_validators,
+        "additional_properties_true": additional_properties_true,
+        "mutation_tools_missing_expected_fingerprint": mutation_tools_missing_expected_fingerprint,
+    }
 
 
 def execute_tool(name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
