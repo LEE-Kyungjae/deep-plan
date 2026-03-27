@@ -21,6 +21,12 @@ EVENTS_PATH = STATE_DIR / "events.jsonl"
 STATE_LOCK = threading.RLock()
 
 
+class PlanConflictError(ValueError):
+    def __init__(self, current_fingerprint: str) -> None:
+        super().__init__("plan fingerprint mismatch")
+        self.current_fingerprint = current_fingerprint
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
@@ -278,6 +284,24 @@ def plan_fingerprint(plan: Dict) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def normalize_fingerprint(value: Optional[str]) -> str:
+    text = str(value or "").strip()
+    if text.startswith("W/"):
+        text = text[2:].strip()
+    if len(text) >= 2 and text[0] == text[-1] == '"':
+        text = text[1:-1]
+    return text.strip()
+
+
+def plan_response(plan: Dict) -> Dict:
+    return {
+        "plan": plan,
+        "summary": plan_summary(plan),
+        "validation": validate_plan_shape(plan),
+        "fingerprint": plan_fingerprint(plan),
+    }
+
+
 def apply_replan_payload(plan: Dict, payload: Dict) -> Dict:
     evidence_text = str(payload.get("evidence", "")).strip()
     if evidence_text:
@@ -325,9 +349,18 @@ def append_jsonl(path: Path, payload: Dict) -> None:
         _append_jsonl_unlocked(path, payload)
 
 
-def mutate_plan_state(mutate_fn, event_payloads: Optional[List[Dict]] = None, include_autoreplan: bool = False):
+def mutate_plan_state(
+    mutate_fn,
+    event_payloads: Optional[List[Dict]] = None,
+    include_autoreplan: bool = False,
+    expected_fingerprint: Optional[str] = None,
+):
     with STATE_LOCK:
         plan = _load_plan_unlocked()
+        current_fingerprint = plan_fingerprint(plan)
+        normalized_expected = normalize_fingerprint(expected_fingerprint)
+        if normalized_expected and normalized_expected != current_fingerprint:
+            raise PlanConflictError(current_fingerprint)
         mutate_fn(plan)
         _save_validated_plan_unlocked(plan)
         for payload in event_payloads or []:

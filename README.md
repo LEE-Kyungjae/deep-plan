@@ -213,7 +213,7 @@ python3 deepplan_server.py --host 127.0.0.1 --port 8787
 Available endpoints:
 
 - `GET /health`: service health check
-- `GET /plan`: full current plan + derived summary
+- `GET /plan`: full current plan + derived summary, plus a `fingerprint` field and `ETag` header
 - `GET /qa`: QA report as JSON
 - `GET /validate`: structural validation report for the current plan
 - `GET /tools`: available tool schemas for agent/tool callers
@@ -222,6 +222,12 @@ Available endpoints:
 - `POST /replan`: append execution evidence or incremental plan deltas and run QA with auto-replan if needed
 - `POST /tools/<tool_name>`: run one tool with `{"input": {...}}`
 - `POST /agent/act`: map slash/natural-language input to a tool call
+
+Write endpoints support optimistic concurrency:
+
+- Send `If-Match: "<fingerprint>"` on HTTP writes to reject stale updates with `412 Precondition Failed`
+- Agent/tool callers can pass `expected_fingerprint` in mutation payloads
+- Successful plan reads and writes return the latest `fingerprint`
 
 Example:
 
@@ -236,6 +242,10 @@ curl -X POST http://127.0.0.1:8787/evidence \
 curl -X POST http://127.0.0.1:8787/replan \
   -H 'Content-Type: application/json' \
   -d '{"evidence":"Pilot users reported repeated friction","evidence_source":"pilot","evidence_confidence":75,"evidence_axis":"market"}'
+curl -X POST http://127.0.0.1:8787/plan \
+  -H 'Content-Type: application/json' \
+  -H 'If-Match: "<fingerprint-from-get-plan>"' \
+  -d '{"goal":"Ship local agent layer"}'
 curl -X POST http://127.0.0.1:8787/tools/add_hypothesis \
   -H 'Content-Type: application/json' \
   -d '{"input":{"hypothesis":"Narrow segment returns weekly","metric":"weekly-active-pilot-users","target":">=20","window":"14 days"}}'
@@ -268,6 +278,8 @@ Supported slash commands:
 - `/deepplan.validate`
 - `/deepplan.evidence`
 - `/deepplan.hypothesis`
+
+Mutation tools now also accept an optional `expected_fingerprint` field so callers can reject stale writes without going through HTTP.
 
 ## Agent Input Mapping
 

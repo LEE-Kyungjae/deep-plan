@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+import io
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+import deepplan
+from deepplan_server import DeepPlanHandler
+
+
+class DeepPlanStateIsolation:
+    def __init__(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        self.state_dir = self.root / ".deeplan"
+        self.originals = {}
+
+    def __enter__(self):
+        self.originals = {
+            "ROOT": deepplan.ROOT,
+            "STATE_DIR": deepplan.STATE_DIR,
+            "PLAN_PATH": deepplan.PLAN_PATH,
+            "DECISIONS_PATH": deepplan.DECISIONS_PATH,
+            "RISKS_PATH": deepplan.RISKS_PATH,
+            "EVENTS_PATH": deepplan.EVENTS_PATH,
+        }
+        deepplan.ROOT = self.root
+        deepplan.STATE_DIR = self.state_dir
+        deepplan.PLAN_PATH = self.state_dir / "plan.json"
+        deepplan.DECISIONS_PATH = self.state_dir / "decisions.jsonl"
+        deepplan.RISKS_PATH = self.state_dir / "risks.jsonl"
+        deepplan.EVENTS_PATH = self.state_dir / "events.jsonl"
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        deepplan.ROOT = self.originals["ROOT"]
+        deepplan.STATE_DIR = self.originals["STATE_DIR"]
+        deepplan.PLAN_PATH = self.originals["PLAN_PATH"]
+        deepplan.DECISIONS_PATH = self.originals["DECISIONS_PATH"]
+        deepplan.RISKS_PATH = self.originals["RISKS_PATH"]
+        deepplan.EVENTS_PATH = self.originals["EVENTS_PATH"]
+        self.tempdir.cleanup()
+
+
+def build_handler(method: str, path: str, body: bytes = b"", headers=None) -> DeepPlanHandler:
+    handler = DeepPlanHandler.__new__(DeepPlanHandler)
+    handler.command = method
+    handler.path = path
+    handler.headers = {"Content-Length": str(len(body)), **(headers or {})}
+    handler.rfile = io.BytesIO(body)
+    handler.wfile = io.BytesIO()
+    handler._status = None
+    handler._sent_headers = {}
+    handler.send_response = lambda status, message=None: setattr(handler, "_status", status)
+    handler.send_header = lambda key, value: handler._sent_headers.__setitem__(key, value)
+    handler.end_headers = lambda: None
+    return handler
+
+
+def decode_response(handler: DeepPlanHandler):
+    payload = json.loads(handler.wfile.getvalue().decode("utf-8"))
+    return handler._status, payload, handler._sent_headers
+
+
+class DeepPlanServerTests(unittest.TestCase):
+    def test_get_plan_returns_fingerprint_and_etag(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            handler = build_handler("GET", "/plan")
+            handler.do_GET()
+            status, payload, headers = decode_response(handler)
+
+        self.assertEqual(status, 200)
+        self.assertIn("fingerprint", payload)
+        self.assertEqual(headers.get("ETag"), f'"{payload["fingerprint"]}"')
+
+    def test_post_plan_if_match_succeeds_and_updates_etag(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            first = build_handler("GET", "/plan")
+            first.do_GET()
+            _, initial_payload, headers = decode_response(first)
+
+            body = json.dumps({"goal": "http update"}).encode("utf-8")
+            handler = build_handler(
+                "POST",
+                "/plan",
+                body=body,
+                headers={"Content-Type": "application/json", "If-Match": headers["ETag"]},
+            )
+            handler.do_POST()
+            status, payload, response_headers = decode_response(handler)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["plan"]["goal"], "http update")
+        self.assertNotEqual(payload["fingerprint"], initial_payload["fingerprint"])
+        self.assertEqual(response_headers.get("ETag"), f'"{payload["fingerprint"]}"')
+
+    def test_post_plan_rejects_stale_if_match(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            first = build_handler("GET", "/plan")
+            first.do_GET()
+            _, initial_payload, headers = decode_response(first)
+
+            fresh_body = json.dumps({"goal": "first update"}).encode("utf-8")
+            fresh = build_handler(
+                "POST",
+                "/plan",
+                body=fresh_body,
+                headers={"Content-Type": "application/json", "If-Match": headers["ETag"]},
+            )
+            fresh.do_POST()
+
+            stale_body = json.dumps({"goal": "stale update"}).encode("utf-8")
+            stale = build_handler(
+                "POST",
+                "/plan",
+                body=stale_body,
+                headers={"Content-Type": "application/json", "If-Match": f'"{initial_payload["fingerprint"]}"'},
+            )
+            stale.do_POST()
+            status, payload, response_headers = decode_response(stale)
+
+        self.assertEqual(status, 412)
+        self.assertEqual(payload["error"], "plan fingerprint mismatch")
+        self.assertIn("current_fingerprint", payload)
+        self.assertEqual(response_headers.get("ETag"), f'"{payload["current_fingerprint"]}"')
+
+    def test_post_plan_rejects_empty_body(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            handler = build_handler("POST", "/plan", body=b"", headers={"Content-Type": "application/json"})
+            handler.do_POST()
+            status, payload, _headers = decode_response(handler)
+
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"], "empty_body")
+
+
+if __name__ == "__main__":
+    unittest.main()

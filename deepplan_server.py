@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 from typing import Any, Dict, Optional
 
 from deepplan_agent import execute_tool, list_tools, natural_language_to_tool
+from deepplan import PlanConflictError, normalize_fingerprint
 
 
 class DeepPlanHandler(BaseHTTPRequestHandler):
@@ -18,7 +19,8 @@ class DeepPlanHandler(BaseHTTPRequestHandler):
             self._write_json(HTTPStatus.OK, {"status": "ok"})
             return
         if path == "/plan":
-            self._write_json(HTTPStatus.OK, execute_tool("get_plan", {}))
+            result = execute_tool("get_plan", {})
+            self._write_json(HTTPStatus.OK, result, extra_headers={"ETag": self._format_etag(result["fingerprint"])})
             return
         if path == "/qa":
             self._write_json(HTTPStatus.OK, execute_tool("get_qa", {}))
@@ -36,57 +38,53 @@ class DeepPlanHandler(BaseHTTPRequestHandler):
         if payload is None:
             return
         path = urlparse(self.path).path
+        expected_fingerprint = self._expected_fingerprint()
 
         if path == "/plan":
-            try:
-                self._write_json(HTTPStatus.OK, execute_tool("update_plan", payload))
-            except ValueError as exc:
-                self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+            self._execute_tool_json("update_plan", payload, expected_fingerprint)
             return
 
         if path == "/evidence":
-            try:
-                self._write_json(HTTPStatus.OK, execute_tool("add_evidence", payload))
-            except ValueError as exc:
-                self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+            self._execute_tool_json("add_evidence", payload, expected_fingerprint)
             return
 
         if path == "/replan":
-            try:
-                self._write_json(HTTPStatus.OK, execute_tool("replan", payload))
-            except ValueError as exc:
-                self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+            self._execute_tool_json("replan", payload, expected_fingerprint)
             return
 
         if path == "/agent/act":
             prompt = str(payload.get("input", "")).strip()
             if not prompt:
-                self._write_json(HTTPStatus.BAD_REQUEST, {"error": "input is required"})
+                self._write_error(HTTPStatus.BAD_REQUEST, "input is required")
                 return
             try:
                 tool_name, tool_input = natural_language_to_tool(prompt)
+                self._merge_expected_fingerprint(tool_input, expected_fingerprint)
                 result = execute_tool(tool_name, tool_input)
-            except ValueError as exc:
-                self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+            except PlanConflictError as exc:
+                self._write_error(HTTPStatus.PRECONDITION_FAILED, str(exc), current_fingerprint=exc.current_fingerprint)
                 return
-            self._write_json(HTTPStatus.OK, {"tool": tool_name, "input": tool_input, "result": result})
+            except ValueError as exc:
+                self._write_error(HTTPStatus.BAD_REQUEST, str(exc))
+                return
+            except Exception as exc:
+                self._write_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc), kind="internal_error")
+                return
+            headers = self._etag_headers(result.get("fingerprint"))
+            self._write_json(HTTPStatus.OK, {"tool": tool_name, "input": tool_input, "result": result}, extra_headers=headers)
             return
 
         if path.startswith("/tools/"):
             tool_name = path.split("/", 2)[2].strip()
             tool_input = payload.get("input", payload)
             if not isinstance(tool_input, dict):
-                self._write_json(HTTPStatus.BAD_REQUEST, {"error": "tool input must be a JSON object"})
+                self._write_error(HTTPStatus.BAD_REQUEST, "tool input must be a JSON object")
                 return
-            try:
-                result = execute_tool(tool_name, tool_input)
-            except ValueError as exc:
-                self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-                return
-            self._write_json(HTTPStatus.OK, {"tool": tool_name, "input": tool_input, "result": result})
+            self._merge_expected_fingerprint(tool_input, expected_fingerprint)
+            self._execute_tool_wrapper(tool_name, tool_input)
             return
 
-        self._write_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
+        self._write_error(HTTPStatus.NOT_FOUND, "not_found", kind="not_found")
 
     def log_message(self, format: str, *args: Any) -> None:
         return
@@ -96,25 +94,91 @@ class DeepPlanHandler(BaseHTTPRequestHandler):
         try:
             raw_length = int(length)
         except ValueError:
-            self._write_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_content_length"})
+            self._write_error(HTTPStatus.BAD_REQUEST, "invalid_content_length")
             return None
 
-        body = self.rfile.read(raw_length) if raw_length > 0 else b"{}"
+        if raw_length <= 0:
+            self._write_error(HTTPStatus.BAD_REQUEST, "empty_body")
+            return None
+
+        body = self.rfile.read(raw_length)
         try:
             payload = json.loads(body.decode("utf-8"))
         except json.JSONDecodeError:
-            self._write_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_json"})
+            self._write_error(HTTPStatus.BAD_REQUEST, "invalid_json")
             return None
         if not isinstance(payload, dict):
-            self._write_json(HTTPStatus.BAD_REQUEST, {"error": "json_body_must_be_object"})
+            self._write_error(HTTPStatus.BAD_REQUEST, "json_body_must_be_object")
             return None
         return payload
 
-    def _write_json(self, status: HTTPStatus, payload: Dict[str, Any]) -> None:
+    def _expected_fingerprint(self) -> Optional[str]:
+        header = self.headers.get("If-Match", "")
+        normalized = normalize_fingerprint(header)
+        return normalized or None
+
+    def _merge_expected_fingerprint(self, payload: Dict[str, Any], expected_fingerprint: Optional[str]) -> None:
+        if expected_fingerprint and "expected_fingerprint" not in payload:
+            payload["expected_fingerprint"] = expected_fingerprint
+
+    def _format_etag(self, fingerprint: str) -> str:
+        return f'"{fingerprint}"'
+
+    def _etag_headers(self, fingerprint: Optional[str]) -> Dict[str, str]:
+        if not fingerprint:
+            return {}
+        return {"ETag": self._format_etag(str(fingerprint))}
+
+    def _write_error(
+        self,
+        status: HTTPStatus,
+        message: str,
+        *,
+        kind: str = "error",
+        current_fingerprint: Optional[str] = None,
+    ) -> None:
+        payload: Dict[str, Any] = {"error": message, "type": kind}
+        if current_fingerprint:
+            payload["current_fingerprint"] = current_fingerprint
+        self._write_json(status, payload, extra_headers=self._etag_headers(current_fingerprint))
+
+    def _execute_tool_json(self, tool_name: str, payload: Dict[str, Any], expected_fingerprint: Optional[str]) -> None:
+        self._merge_expected_fingerprint(payload, expected_fingerprint)
+        try:
+            result = execute_tool(tool_name, payload)
+        except PlanConflictError as exc:
+            self._write_error(HTTPStatus.PRECONDITION_FAILED, str(exc), current_fingerprint=exc.current_fingerprint)
+            return
+        except ValueError as exc:
+            self._write_error(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        except Exception as exc:
+            self._write_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc), kind="internal_error")
+            return
+        self._write_json(HTTPStatus.OK, result, extra_headers=self._etag_headers(result.get("fingerprint")))
+
+    def _execute_tool_wrapper(self, tool_name: str, tool_input: Dict[str, Any]) -> None:
+        try:
+            result = execute_tool(tool_name, tool_input)
+        except PlanConflictError as exc:
+            self._write_error(HTTPStatus.PRECONDITION_FAILED, str(exc), current_fingerprint=exc.current_fingerprint)
+            return
+        except ValueError as exc:
+            self._write_error(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        except Exception as exc:
+            self._write_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc), kind="internal_error")
+            return
+        headers = self._etag_headers(result.get("fingerprint"))
+        self._write_json(HTTPStatus.OK, {"tool": tool_name, "input": tool_input, "result": result}, extra_headers=headers)
+
+    def _write_json(self, status: HTTPStatus, payload: Dict[str, Any], extra_headers: Optional[Dict[str, str]] = None) -> None:
         encoded = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(encoded)))
+        for key, value in (extra_headers or {}).items():
+            self.send_header(key, value)
         self.end_headers()
         self.wfile.write(encoded)
 

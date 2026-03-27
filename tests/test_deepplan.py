@@ -113,12 +113,49 @@ class DeepPlanRegressionTests(unittest.TestCase):
         self.assertEqual(result["auto_replan"]["blocked"], [])
         self.assertEqual(result["qa"]["result"], "PASS")
         self.assertEqual(result["validation"], {"valid": True, "errors": []})
+        self.assertEqual(result["fingerprint"], deepplan.plan_fingerprint(result["plan"]))
         self.assertTrue(auto_replan_events)
         self.assertIn("final_score", auto_replan_events[-1])
         self.assertIn("score_delta", auto_replan_events[-1])
         self.assertIsNotNone(summary["recent_auto_replan"])
         self.assertEqual(summary["recent_auto_replan"]["final_result"], "PASS")
         self.assertTrue(summary["recent_auto_replan"]["actions"])
+
+    def test_mutate_plan_state_rejects_stale_expected_fingerprint(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            initial = deepplan.load_plan()
+            initial_fingerprint = deepplan.plan_fingerprint(initial)
+            updated = deepplan.mutate_plan_state(lambda plan: plan.update({"goal": "first"}))
+            self.assertEqual(updated["goal"], "first")
+
+            with self.assertRaises(deepplan.PlanConflictError) as ctx:
+                deepplan.mutate_plan_state(
+                    lambda plan: plan.update({"goal": "second"}),
+                    expected_fingerprint=initial_fingerprint,
+                )
+
+        self.assertEqual(ctx.exception.current_fingerprint, deepplan.plan_fingerprint(updated))
+
+    def test_update_plan_tool_rejects_stale_expected_fingerprint(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            first = deepplan_agent.execute_tool("get_plan", {})
+            deepplan_agent.execute_tool(
+                "update_plan",
+                {
+                    "goal": "fresh write",
+                    "expected_fingerprint": first["fingerprint"],
+                },
+            )
+            with self.assertRaisesRegex(deepplan.PlanConflictError, "plan fingerprint mismatch"):
+                deepplan_agent.execute_tool(
+                    "update_plan",
+                    {
+                        "goal": "stale write",
+                        "expected_fingerprint": first["fingerprint"],
+                    },
+                )
 
     def test_replan_tool_validates_confidence_type(self):
         with DeepPlanStateIsolation():

@@ -11,6 +11,8 @@ from deepplan import (
     mutate_plan_state,
     now_iso,
     parse_csv,
+    plan_fingerprint,
+    plan_response,
     plan_summary,
     qa_autoreplan_result,
     qa_report,
@@ -73,6 +75,7 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
         "input_schema": {
             "type": "object",
             "properties": {
+                "expected_fingerprint": {"type": "string"},
                 "evidence": {"type": "string"},
                 "evidence_source": {"type": "string"},
                 "evidence_confidence": {"type": "integer"},
@@ -101,6 +104,7 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
         "input_schema": {
             "type": "object",
             "properties": {
+                "expected_fingerprint": {"type": "string"},
                 "goal": {"type": "string"},
                 "success_metric": {"type": "string"},
                 "deadline": {"type": "string"},
@@ -154,6 +158,7 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
         "input_schema": {
             "type": "object",
             "properties": {
+                "expected_fingerprint": {"type": "string"},
                 "claim": {"type": "string"},
                 "source": {"type": "string"},
                 "confidence": {"type": "integer"},
@@ -171,6 +176,7 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
         "input_schema": {
             "type": "object",
             "properties": {
+                "expected_fingerprint": {"type": "string"},
                 "hypothesis": {"type": "string"},
                 "metric": {"type": "string"},
                 "target": {"type": "string"},
@@ -194,9 +200,15 @@ def ensure_object_payload(payload: Dict[str, Any]) -> None:
         raise ValueError("payload must be a JSON object")
 
 
+def validate_expected_fingerprint(payload: Dict[str, Any]) -> None:
+    if "expected_fingerprint" in payload and not isinstance(payload["expected_fingerprint"], str):
+        raise ValueError("expected_fingerprint must be a string")
+
+
 def validate_update_payload(payload: Dict[str, Any]) -> None:
     ensure_object_payload(payload)
-    allowed = set(SCALAR_PLAN_FIELDS + LIST_PLAN_FIELDS)
+    validate_expected_fingerprint(payload)
+    allowed = set(SCALAR_PLAN_FIELDS + LIST_PLAN_FIELDS + ["expected_fingerprint"])
     unknown = sorted(set(payload) - allowed)
     if unknown:
         raise ValueError(f"unknown update_plan fields: {', '.join(unknown)}")
@@ -225,7 +237,8 @@ def validate_update_payload(payload: Dict[str, Any]) -> None:
 
 def validate_evidence_payload(payload: Dict[str, Any]) -> None:
     ensure_object_payload(payload)
-    allowed = {"claim", "source", "confidence", "axis", "date", "reference"}
+    validate_expected_fingerprint(payload)
+    allowed = {"claim", "source", "confidence", "axis", "date", "reference", "expected_fingerprint"}
     unknown = sorted(set(payload) - allowed)
     if unknown:
         raise ValueError(f"unknown add_evidence fields: {', '.join(unknown)}")
@@ -241,7 +254,8 @@ def validate_evidence_payload(payload: Dict[str, Any]) -> None:
 
 def validate_hypothesis_payload(payload: Dict[str, Any]) -> None:
     ensure_object_payload(payload)
-    allowed = {"hypothesis", "metric", "target", "window", "status", "outcome", "evidence", "confidence", "axis", "date"}
+    validate_expected_fingerprint(payload)
+    allowed = {"hypothesis", "metric", "target", "window", "status", "outcome", "evidence", "confidence", "axis", "date", "expected_fingerprint"}
     unknown = sorted(set(payload) - allowed)
     if unknown:
         raise ValueError(f"unknown add_hypothesis fields: {', '.join(unknown)}")
@@ -260,7 +274,9 @@ def validate_hypothesis_payload(payload: Dict[str, Any]) -> None:
 
 def validate_replan_payload(payload: Dict[str, Any]) -> None:
     ensure_object_payload(payload)
+    validate_expected_fingerprint(payload)
     allowed = {
+        "expected_fingerprint",
         "evidence",
         "evidence_source",
         "evidence_confidence",
@@ -309,7 +325,7 @@ def list_tools() -> List[Dict[str, Any]]:
 def execute_tool(name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     if name == "get_plan":
         plan = load_plan()
-        return {"plan": plan, "summary": plan_summary(plan), "validation": validate_plan_shape(plan)}
+        return plan_response(plan)
 
     if name == "get_qa":
         return qa_report(load_plan())
@@ -322,11 +338,13 @@ def execute_tool(name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         result = mutate_plan_state(
             lambda plan: apply_replan_payload(plan, payload),
             include_autoreplan=True,
+            expected_fingerprint=payload.get("expected_fingerprint"),
         )
         return {
             "plan": result["plan"],
             "summary": plan_summary(result["plan"]),
             "validation": validate_plan_shape(result["plan"]),
+            "fingerprint": plan_fingerprint(result["plan"]),
             "qa": result["qa"],
             "auto_replan": result["auto_replan"],
         }
@@ -336,11 +354,13 @@ def execute_tool(name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         result = mutate_plan_state(
             lambda plan: merge_plan_updates(plan, payload),
             include_autoreplan=True,
+            expected_fingerprint=payload.get("expected_fingerprint"),
         )
         return {
             "plan": result["plan"],
             "summary": plan_summary(result["plan"]),
             "validation": validate_plan_shape(result["plan"]),
+            "fingerprint": plan_fingerprint(result["plan"]),
             "qa": result["qa"],
             "auto_replan": result["auto_replan"],
         }
@@ -361,9 +381,10 @@ def execute_tool(name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
                 plan.setdefault("references", []).append(payload["reference"].strip())
                 if isinstance(payload.get("reference"), str) and payload["reference"].strip()
                 else None,
-            )
+            ),
+            expected_fingerprint=payload.get("expected_fingerprint"),
         )
-        return {"plan": plan, "summary": plan_summary(plan), "validation": validate_plan_shape(plan), "qa": qa_report(plan)}
+        return {"plan": plan, "summary": plan_summary(plan), "validation": validate_plan_shape(plan), "fingerprint": plan_response(plan)["fingerprint"], "qa": qa_report(plan)}
 
     if name == "add_hypothesis":
         validate_hypothesis_payload(payload)
@@ -393,9 +414,10 @@ def execute_tool(name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
                 )
                 if evidence
                 else None,
-            )
+            ),
+            expected_fingerprint=payload.get("expected_fingerprint"),
         )
-        return {"plan": plan, "summary": plan_summary(plan), "validation": validate_plan_shape(plan), "qa": qa_report(plan)}
+        return {"plan": plan, "summary": plan_summary(plan), "validation": validate_plan_shape(plan), "fingerprint": plan_response(plan)["fingerprint"], "qa": qa_report(plan)}
 
     raise ValueError(f"unknown tool: {name}")
 
