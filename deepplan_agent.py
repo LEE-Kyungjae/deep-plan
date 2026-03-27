@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Tuple
 from deepplan import (
     add_evidence,
     apply_replan_payload,
+    get_revision,
+    list_revisions,
     load_plan,
     mutate_plan_state,
     now_iso,
@@ -68,6 +70,28 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
         "name": "validate_plan",
         "description": "Validate the current DeepPlan plan structure and nested records.",
         "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
+        "name": "get_history",
+        "description": "Return recent plan revisions with snapshot metadata.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"limit": {"type": "integer"}},
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "restore_revision",
+        "description": "Restore the current plan to a previously recorded revision snapshot.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "revision_id": {"type": "string"},
+                "expected_fingerprint": {"type": "string"},
+            },
+            "required": ["revision_id"],
+            "additionalProperties": False,
+        },
     },
     {
         "name": "replan",
@@ -235,6 +259,28 @@ def validate_update_payload(payload: Dict[str, Any]) -> None:
             raise ValueError(f"{field} must contain only strings")
 
 
+def validate_history_payload(payload: Dict[str, Any]) -> None:
+    ensure_object_payload(payload)
+    allowed = {"limit"}
+    unknown = sorted(set(payload) - allowed)
+    if unknown:
+        raise ValueError(f"unknown get_history fields: {', '.join(unknown)}")
+    if "limit" in payload and (not isinstance(payload["limit"], int) or isinstance(payload["limit"], bool)):
+        raise ValueError("limit must be an integer")
+
+
+def validate_restore_payload(payload: Dict[str, Any]) -> None:
+    ensure_object_payload(payload)
+    validate_expected_fingerprint(payload)
+    allowed = {"revision_id", "expected_fingerprint"}
+    unknown = sorted(set(payload) - allowed)
+    if unknown:
+        raise ValueError(f"unknown restore_revision fields: {', '.join(unknown)}")
+    revision_id = payload.get("revision_id", "")
+    if not isinstance(revision_id, str) or not revision_id.strip():
+        raise ValueError("revision_id is required")
+
+
 def validate_evidence_payload(payload: Dict[str, Any]) -> None:
     ensure_object_payload(payload)
     validate_expected_fingerprint(payload)
@@ -330,8 +376,29 @@ def execute_tool(name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     if name == "get_qa":
         return qa_report(load_plan())
 
+    if name == "get_history":
+        validate_history_payload(payload)
+        return {"revisions": list_revisions(int(payload.get("limit", 10)))}
+
     if name == "validate_plan":
         return validate_plan_shape(load_plan())
+
+    if name == "restore_revision":
+        validate_restore_payload(payload)
+        revision = get_revision(str(payload.get("revision_id", "")).strip())
+        plan = mutate_plan_state(
+            lambda current_plan: (
+                current_plan.clear(),
+                current_plan.update(json.loads(json.dumps(revision["plan"]))),
+            ),
+            expected_fingerprint=payload.get("expected_fingerprint"),
+            revision_source="restore_revision",
+            revision_reason=f"restore:{revision['revision_id']}",
+        )
+        response = plan_response(plan)
+        response["restored_revision_id"] = revision["revision_id"]
+        response["qa"] = qa_report(plan)
+        return response
 
     if name == "replan":
         validate_replan_payload(payload)
@@ -339,6 +406,8 @@ def execute_tool(name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
             lambda plan: apply_replan_payload(plan, payload),
             include_autoreplan=True,
             expected_fingerprint=payload.get("expected_fingerprint"),
+            revision_source="replan",
+            revision_reason=str(payload.get("evidence", "")).strip(),
         )
         return {
             "plan": result["plan"],
@@ -355,6 +424,8 @@ def execute_tool(name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
             lambda plan: merge_plan_updates(plan, payload),
             include_autoreplan=True,
             expected_fingerprint=payload.get("expected_fingerprint"),
+            revision_source="update_plan",
+            revision_reason=str(payload.get("goal", "")).strip(),
         )
         return {
             "plan": result["plan"],
@@ -383,6 +454,8 @@ def execute_tool(name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
                 else None,
             ),
             expected_fingerprint=payload.get("expected_fingerprint"),
+            revision_source="add_evidence",
+            revision_reason=claim,
         )
         return {"plan": plan, "summary": plan_summary(plan), "validation": validate_plan_shape(plan), "fingerprint": plan_response(plan)["fingerprint"], "qa": qa_report(plan)}
 
@@ -416,6 +489,8 @@ def execute_tool(name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
                 else None,
             ),
             expected_fingerprint=payload.get("expected_fingerprint"),
+            revision_source="add_hypothesis",
+            revision_reason=hypothesis,
         )
         return {"plan": plan, "summary": plan_summary(plan), "validation": validate_plan_shape(plan), "fingerprint": plan_response(plan)["fingerprint"], "qa": qa_report(plan)}
 
@@ -454,6 +529,8 @@ def slash_to_tool(command: str) -> Tuple[str, Dict[str, Any]]:
         "/deepplan.plan": "update_plan",
         "/deepplan.replan": "replan",
         "/deepplan.show": "get_plan",
+        "/deepplan.history": "get_history",
+        "/deepplan.restore": "restore_revision",
         "/deepplan.qa": "get_qa",
         "/deepplan.validate": "validate_plan",
         "/deepplan.evidence": "add_evidence",
@@ -472,12 +549,16 @@ def natural_language_to_tool(text: str) -> Tuple[str, Dict[str, Any]]:
         return slash_to_tool(stripped)
     if any(phrase in lowered for phrase in ["qa", "quality check", "quality status"]):
         return "get_qa", {}
+    if any(phrase in lowered for phrase in ["history", "revision history", "plan history"]):
+        return "get_history", {}
     if any(phrase in lowered for phrase in ["validate plan", "plan validation", "check plan structure"]):
         return "validate_plan", {}
     if lowered.startswith("replan "):
         return "replan", parse_assignment_tokens(shlex.split(stripped[len("replan ") :]))
     if any(phrase in lowered for phrase in ["show plan", "current plan", "plan summary", "what is the plan"]):
         return "get_plan", {}
+    if lowered.startswith("restore revision "):
+        return "restore_revision", parse_assignment_tokens(shlex.split(stripped[len("restore revision ") :]))
     if lowered.startswith("add evidence "):
         return "add_evidence", parse_assignment_tokens(shlex.split(stripped[len("add evidence ") :]))
     if lowered.startswith("update plan "):

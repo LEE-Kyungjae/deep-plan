@@ -25,6 +25,9 @@ class DeepPlanHandler(BaseHTTPRequestHandler):
         if path == "/qa":
             self._write_json(HTTPStatus.OK, execute_tool("get_qa", {}))
             return
+        if path == "/history":
+            self._write_json(HTTPStatus.OK, execute_tool("get_history", {}))
+            return
         if path == "/validate":
             self._write_json(HTTPStatus.OK, execute_tool("validate_plan", {}))
             return

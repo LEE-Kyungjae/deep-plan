@@ -188,6 +188,8 @@ python3 deepplan_server.py --port 8787
 - `qa`: run QA checks manually
 - `validate`: validate plan structure and nested record types
 - `show`: print current plan summary, including the latest auto-replan signal when present
+- `history`: print recent revision snapshots
+- `restore`: restore the current plan from a recorded revision snapshot
 - `ideate`: generate plan ideas from lightweight user context and optionally apply one
 - `insight`: generate viewpoint-expansion insight pack and optionally apply it
 - `review`: run cycle-based planning review with recommendations and next questions
@@ -215,6 +217,7 @@ Available endpoints:
 - `GET /health`: service health check
 - `GET /plan`: full current plan + derived summary, plus a `fingerprint` field and `ETag` header
 - `GET /qa`: QA report as JSON
+- `GET /history`: recent revision snapshots
 - `GET /validate`: structural validation report for the current plan
 - `GET /tools`: available tool schemas for agent/tool callers
 - `POST /plan`: update core plan fields using a JSON object and run QA with auto-replan if needed
@@ -234,6 +237,7 @@ Example:
 ```bash
 curl http://127.0.0.1:8787/plan
 curl http://127.0.0.1:8787/qa
+curl http://127.0.0.1:8787/history
 curl http://127.0.0.1:8787/validate
 curl http://127.0.0.1:8787/tools
 curl -X POST http://127.0.0.1:8787/evidence \
@@ -263,6 +267,7 @@ python3 deepplan_agent.py tools
 python3 deepplan_agent.py run --input '/deepplan.show'
 python3 deepplan_agent.py run --input '/deepplan.plan goal="Ship local agent layer" planning_horizon="4 weeks" review_cadence=weekly'
 python3 deepplan_agent.py run --input '/deepplan.replan evidence="Pilot retention improved" evidence_confidence=70 evidence_axis=market'
+python3 deepplan_agent.py run --input '/deepplan.history'
 python3 deepplan_agent.py run --input '/deepplan.evidence claim="Repeated planning pain" source=interviews confidence=72 axis=market'
 python3 deepplan_agent.py run --input 'show plan'
 python3 deepplan_agent.py run --input 'qa'
@@ -274,6 +279,8 @@ Supported slash commands:
 - `/deepplan.plan`
 - `/deepplan.replan`
 - `/deepplan.show`
+- `/deepplan.history`
+- `/deepplan.restore`
 - `/deepplan.qa`
 - `/deepplan.validate`
 - `/deepplan.evidence`
@@ -287,6 +294,8 @@ Bundled wrapper behavior:
 - `/deepplan` and `/deepplan.plan` -> `update_plan` tool payload
 - `/deepplan.replan` -> `replan` tool payload
 - `/deepplan.show` -> `get_plan`
+- `/deepplan.history` -> `get_history`
+- `/deepplan.restore` -> `restore_revision`
 - `/deepplan.qa` -> `get_qa`
 - `/deepplan.validate` -> `validate_plan`
 - `/deepplan.evidence` -> `add_evidence`

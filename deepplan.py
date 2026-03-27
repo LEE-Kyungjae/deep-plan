@@ -18,6 +18,7 @@ PLAN_PATH = STATE_DIR / "plan.json"
 DECISIONS_PATH = STATE_DIR / "decisions.jsonl"
 RISKS_PATH = STATE_DIR / "risks.jsonl"
 EVENTS_PATH = STATE_DIR / "events.jsonl"
+REVISIONS_PATH = STATE_DIR / "revisions.jsonl"
 STATE_LOCK = threading.RLock()
 
 
@@ -33,7 +34,7 @@ def now_iso() -> str:
 
 def ensure_state() -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    for p in [DECISIONS_PATH, RISKS_PATH, EVENTS_PATH]:
+    for p in [DECISIONS_PATH, RISKS_PATH, EVENTS_PATH, REVISIONS_PATH]:
         if not p.exists():
             p.write_text("", encoding="utf-8")
     if not PLAN_PATH.exists():
@@ -349,11 +350,38 @@ def append_jsonl(path: Path, payload: Dict) -> None:
         _append_jsonl_unlocked(path, payload)
 
 
+def make_revision_entry(plan: Dict, source: str, reason: str = "", previous_fingerprint: str = "") -> Dict:
+    fingerprint = plan_fingerprint(plan)
+    ts = now_iso()
+    return {
+        "revision_id": f"{ts}_{fingerprint[:12]}",
+        "ts": ts,
+        "source": source,
+        "reason": reason,
+        "fingerprint": fingerprint,
+        "previous_fingerprint": previous_fingerprint,
+        "plan": json.loads(json.dumps(plan)),
+    }
+
+
+def _append_revision_unlocked(plan: Dict, source: str, reason: str = "", previous_fingerprint: str = "") -> Dict:
+    entry = make_revision_entry(plan, source, reason=reason, previous_fingerprint=previous_fingerprint)
+    _append_jsonl_unlocked(REVISIONS_PATH, entry)
+    return entry
+
+
+def append_revision(plan: Dict, source: str, reason: str = "", previous_fingerprint: str = "") -> Dict:
+    with STATE_LOCK:
+        return _append_revision_unlocked(plan, source, reason=reason, previous_fingerprint=previous_fingerprint)
+
+
 def mutate_plan_state(
     mutate_fn,
     event_payloads: Optional[List[Dict]] = None,
     include_autoreplan: bool = False,
     expected_fingerprint: Optional[str] = None,
+    revision_source: str = "mutate_plan_state",
+    revision_reason: str = "",
 ):
     with STATE_LOCK:
         plan = _load_plan_unlocked()
@@ -363,10 +391,11 @@ def mutate_plan_state(
             raise PlanConflictError(current_fingerprint)
         mutate_fn(plan)
         _save_validated_plan_unlocked(plan)
+        revision_entry = _append_revision_unlocked(plan, revision_source, reason=revision_reason, previous_fingerprint=current_fingerprint)
         for payload in event_payloads or []:
             _append_jsonl_unlocked(EVENTS_PATH, payload)
         if include_autoreplan:
-            return qa_autoreplan_result(plan)
+            return qa_autoreplan_result(plan, base_revision_entry=revision_entry)
         return plan
 
 
@@ -385,6 +414,23 @@ def read_jsonl(path: Path) -> List[Dict]:
         if isinstance(payload, dict):
             items.append(payload)
     return items
+
+
+def list_revisions(limit: int = 10) -> List[Dict]:
+    items = [item for item in read_jsonl(REVISIONS_PATH) if isinstance(item, dict)]
+    if limit <= 0:
+        return list(reversed(items))
+    return list(reversed(items[-limit:]))
+
+
+def get_revision(revision_id: str) -> Dict:
+    wanted = revision_id.strip()
+    if not wanted:
+        raise ValueError("revision_id is required")
+    for item in read_jsonl(REVISIONS_PATH):
+        if item.get("revision_id") == wanted:
+            return item
+    raise ValueError(f"unknown revision_id: {wanted}")
 
 
 def last_auto_replan_event(plan: Optional[Dict] = None) -> Optional[Dict]:
@@ -1143,7 +1189,7 @@ def auto_replan(plan: Dict, checks: List[CheckResult]) -> Tuple[Dict, List[str],
     return plan, actions, blocked
 
 
-def qa_autoreplan_result(plan: Dict) -> Dict:
+def qa_autoreplan_result(plan: Dict, base_revision_entry: Optional[Dict] = None) -> Dict:
     score, checks, critical_failure = run_qa(plan)
     initial = qa_report(plan)
     threshold = qa_pass_threshold(checks)
@@ -1184,8 +1230,15 @@ def qa_autoreplan_result(plan: Dict) -> Dict:
         return outcome
 
     save_validated_plan(updated_plan)
+    auto_revision = append_revision(
+        updated_plan,
+        "qa_autoreplan_result",
+        reason="auto_replan",
+        previous_fingerprint=initial_fingerprint,
+    )
     outcome["plan"] = updated_plan
     outcome["qa"] = qa_report(updated_plan)
+    outcome["auto_replan"]["revision_id"] = auto_revision["revision_id"]
     event_payload.update(
         {
             "final_result": outcome["qa"]["result"],
@@ -1257,6 +1310,8 @@ def cmd_plan(args: argparse.Namespace) -> None:
         apply_updates,
         event_payloads=[{"ts": now_iso(), "type": "plan_updated", "source": "cmd_plan", "goal": args.goal or ""}],
         include_autoreplan=True,
+        revision_source="cmd_plan",
+        revision_reason=args.goal or "",
     )
     report = result["initial_qa"]
     print_qa(
@@ -1288,6 +1343,8 @@ def cmd_replan(args: argparse.Namespace) -> None:
         lambda plan: apply_replan_payload(plan, vars(args)),
         event_payloads=[{"ts": now_iso(), "type": "replan", "source": "cmd_replan", "evidence": args.evidence or ""}],
         include_autoreplan=True,
+        revision_source="cmd_replan",
+        revision_reason=args.evidence or "",
     )
     report = result["initial_qa"]
     print_qa(
@@ -1357,6 +1414,8 @@ def cmd_evidence(args: argparse.Namespace) -> None:
                 "confidence": ensure_confidence(args.confidence),
             }
         ],
+        revision_source="cmd_evidence",
+        revision_reason=claim,
     )
     print("Evidence recorded.")
 
@@ -1395,6 +1454,8 @@ def cmd_hypothesis(args: argparse.Namespace) -> None:
                 "hypothesis": hypothesis,
             }
         ],
+        revision_source="cmd_hypothesis",
+        revision_reason=hypothesis,
     )
     print("Hypothesis recorded.")
 
@@ -1432,6 +1493,10 @@ def cmd_show(_: argparse.Namespace) -> None:
     print(f"Evidence Items: {summary['evidence_count']}")
     print(f"Hypotheses: {summary['hypothesis_count']}")
     print(f"Risks: {summary['risk_count']}")
+    revisions = list_revisions(limit=1)
+    print(f"Revision Count: {len(read_jsonl(REVISIONS_PATH))}")
+    if revisions:
+        print(f"Latest Revision: {revisions[0]['revision_id']} ({revisions[0]['source']})")
     if summary["recent_auto_replan"]:
         recent = summary["recent_auto_replan"]
         print(
@@ -1445,6 +1510,39 @@ def cmd_show(_: argparse.Namespace) -> None:
             print("Recent Auto Replan Actions:")
             for action in recent["actions"]:
                 print(f"- {action}")
+
+
+def cmd_history(args: argparse.Namespace) -> None:
+    revisions = list_revisions(limit=args.limit)
+    if args.json:
+        print(json.dumps({"revisions": revisions}, indent=2, ensure_ascii=False))
+        return
+    if not revisions:
+        print("No revisions recorded.")
+        return
+    for item in revisions:
+        reason = f" | {item['reason']}" if item.get("reason") else ""
+        print(f"{item['revision_id']} | {item['ts']} | {item['source']}{reason}")
+
+
+def cmd_restore(args: argparse.Namespace) -> None:
+    revision = get_revision(args.revision_id)
+    restored = mutate_plan_state(
+        lambda plan: (plan.clear(), plan.update(json.loads(json.dumps(revision["plan"])))),
+        event_payloads=[
+            {
+                "ts": now_iso(),
+                "type": "plan_restored",
+                "source": "cmd_restore",
+                "revision_id": revision["revision_id"],
+            }
+        ],
+        expected_fingerprint=args.expected_fingerprint or None,
+        revision_source="cmd_restore",
+        revision_reason=f"restore:{revision['revision_id']}",
+    )
+    print(f"Restored revision {revision['revision_id']}")
+    print(f"Current fingerprint: {plan_fingerprint(restored)}")
 
 
 def cmd_insight(args: argparse.Namespace) -> None:
@@ -1520,6 +1618,8 @@ def cmd_insight(args: argparse.Namespace) -> None:
                     "applied": True,
                 }
             ],
+            revision_source="cmd_insight",
+            revision_reason=topic,
         )
         print("Insight pack applied to current plan.")
 
@@ -1636,6 +1736,8 @@ def cmd_review(args: argparse.Namespace) -> None:
                     "critical_failure": critical_failure,
                 }
             ],
+            revision_source="cmd_review",
+            revision_reason=period,
         )
         report["applied"] = True
 
@@ -1714,6 +1816,8 @@ def cmd_ideate(args: argparse.Namespace) -> None:
                     "goal": selected["goal"],
                 }
             ],
+            revision_source="cmd_ideate",
+            revision_reason=selected["goal"],
         )
         print(f"Applied idea #{args.apply} to current plan.")
         score, checks, critical_failure = run_qa(plan)
@@ -1819,6 +1923,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("show")
     s.set_defaults(func=cmd_show)
+
+    s = sub.add_parser("history")
+    s.add_argument("--limit", type=int, default=10)
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(func=cmd_history)
+
+    s = sub.add_parser("restore")
+    s.add_argument("--revision-id", type=str, required=True)
+    s.add_argument("--expected-fingerprint", type=str, default="")
+    s.set_defaults(func=cmd_restore)
 
     s = sub.add_parser("ideate")
     s.add_argument("--profile", type=str, default="")

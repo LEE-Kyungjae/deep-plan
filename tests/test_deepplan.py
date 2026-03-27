@@ -25,6 +25,7 @@ class DeepPlanStateIsolation:
             "DECISIONS_PATH": deepplan.DECISIONS_PATH,
             "RISKS_PATH": deepplan.RISKS_PATH,
             "EVENTS_PATH": deepplan.EVENTS_PATH,
+            "REVISIONS_PATH": deepplan.REVISIONS_PATH,
         }
         deepplan.ROOT = self.root
         deepplan.STATE_DIR = self.state_dir
@@ -32,6 +33,7 @@ class DeepPlanStateIsolation:
         deepplan.DECISIONS_PATH = self.state_dir / "decisions.jsonl"
         deepplan.RISKS_PATH = self.state_dir / "risks.jsonl"
         deepplan.EVENTS_PATH = self.state_dir / "events.jsonl"
+        deepplan.REVISIONS_PATH = self.state_dir / "revisions.jsonl"
         return self
 
     def __exit__(self, exc_type, exc, tb):
@@ -41,6 +43,7 @@ class DeepPlanStateIsolation:
         deepplan.DECISIONS_PATH = self.originals["DECISIONS_PATH"]
         deepplan.RISKS_PATH = self.originals["RISKS_PATH"]
         deepplan.EVENTS_PATH = self.originals["EVENTS_PATH"]
+        deepplan.REVISIONS_PATH = self.originals["REVISIONS_PATH"]
         self.tempdir.cleanup()
 
 
@@ -412,6 +415,70 @@ class DeepPlanRegressionTests(unittest.TestCase):
 
         self.assertIn("Recent Auto Replan:", output)
         self.assertIn("Recent Auto Replan Actions:", output)
+
+    def test_update_plan_records_revision_history_and_restore_revision_tool(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            first = deepplan_agent.execute_tool(
+                "update_plan",
+                {
+                    "goal": "first goal",
+                    "success_metric": "Reach 2 pilots",
+                    "deadline": "2026-04-03",
+                },
+            )
+            second = deepplan_agent.execute_tool(
+                "update_plan",
+                {
+                    "goal": "second goal",
+                    "expected_fingerprint": first["fingerprint"],
+                },
+            )
+            history = deepplan_agent.execute_tool("get_history", {"limit": 10})
+            restored = deepplan_agent.execute_tool(
+                "restore_revision",
+                {
+                    "revision_id": history["revisions"][-1]["revision_id"],
+                    "expected_fingerprint": second["fingerprint"],
+                },
+            )
+
+        self.assertGreaterEqual(len(history["revisions"]), 2)
+        self.assertEqual(history["revisions"][0]["source"], "update_plan")
+        self.assertEqual(restored["restored_revision_id"], history["revisions"][-1]["revision_id"])
+        self.assertEqual(restored["plan"]["goal"], "first goal")
+        self.assertEqual(restored["fingerprint"], deepplan.plan_fingerprint(restored["plan"]))
+
+    def test_cmd_history_and_restore_print_revision_info(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            deepplan_agent.execute_tool(
+                "update_plan",
+                {
+                    "goal": "history print test",
+                    "success_metric": "Reach 2 pilots",
+                    "deadline": "2026-04-03",
+                },
+            )
+            revisions = deepplan.list_revisions(limit=1)
+            history_stdout = io.StringIO()
+            with redirect_stdout(history_stdout):
+                deepplan.cmd_history(type("Args", (), {"limit": 5, "json": False})())
+            restore_stdout = io.StringIO()
+            with redirect_stdout(restore_stdout):
+                deepplan.cmd_restore(
+                    type(
+                        "Args",
+                        (),
+                        {
+                            "revision_id": revisions[0]["revision_id"],
+                            "expected_fingerprint": "",
+                        },
+                    )()
+                )
+
+        self.assertIn(revisions[0]["revision_id"], history_stdout.getvalue())
+        self.assertIn("Restored revision", restore_stdout.getvalue())
 
 
 if __name__ == "__main__":

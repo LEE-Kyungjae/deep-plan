@@ -24,6 +24,7 @@ class DeepPlanStateIsolation:
             "DECISIONS_PATH": deepplan.DECISIONS_PATH,
             "RISKS_PATH": deepplan.RISKS_PATH,
             "EVENTS_PATH": deepplan.EVENTS_PATH,
+            "REVISIONS_PATH": deepplan.REVISIONS_PATH,
         }
         deepplan.ROOT = self.root
         deepplan.STATE_DIR = self.state_dir
@@ -31,6 +32,7 @@ class DeepPlanStateIsolation:
         deepplan.DECISIONS_PATH = self.state_dir / "decisions.jsonl"
         deepplan.RISKS_PATH = self.state_dir / "risks.jsonl"
         deepplan.EVENTS_PATH = self.state_dir / "events.jsonl"
+        deepplan.REVISIONS_PATH = self.state_dir / "revisions.jsonl"
         return self
 
     def __exit__(self, exc_type, exc, tb):
@@ -40,6 +42,7 @@ class DeepPlanStateIsolation:
         deepplan.DECISIONS_PATH = self.originals["DECISIONS_PATH"]
         deepplan.RISKS_PATH = self.originals["RISKS_PATH"]
         deepplan.EVENTS_PATH = self.originals["EVENTS_PATH"]
+        deepplan.REVISIONS_PATH = self.originals["REVISIONS_PATH"]
         self.tempdir.cleanup()
 
 
@@ -137,6 +140,24 @@ class DeepPlanServerTests(unittest.TestCase):
 
         self.assertEqual(status, 400)
         self.assertEqual(payload["error"], "empty_body")
+
+    def test_get_history_returns_revision_entries(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            update = build_handler(
+                "POST",
+                "/plan",
+                body=json.dumps({"goal": "history endpoint"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            update.do_POST()
+            handler = build_handler("GET", "/history")
+            handler.do_GET()
+            status, payload, _headers = decode_response(handler)
+
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["revisions"])
+        self.assertEqual(payload["revisions"][0]["source"], "update_plan")
 
 
 if __name__ == "__main__":
