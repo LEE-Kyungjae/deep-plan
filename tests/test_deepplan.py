@@ -526,6 +526,10 @@ class DeepPlanRegressionTests(unittest.TestCase):
         self.assertIn("goal", preview["changed_fields"])
         self.assertIn("metadata", preview)
         self.assertEqual(preview["metadata"]["goal"], "preview first goal")
+        self.assertTrue(preview["diff"])
+        goal_diff = next(item for item in preview["diff"] if item["field"] == "goal")
+        self.assertEqual(goal_diff["before"]["type"], "scalar")
+        self.assertEqual(goal_diff["after"]["type"], "scalar")
         self.assertEqual(current_plan["goal"], "preview second goal")
         self.assertEqual(preview["current_fingerprint"], second["fingerprint"])
 

@@ -193,6 +193,7 @@ python3 deepplan_server.py --port 8787
 - `history`: print recent revision snapshots
 - `restore`: restore the current plan from a recorded revision snapshot
   - `restore --preview`: preview changed fields and summary impact before mutation
+  - restore preview now includes structured field-level diff summaries
 - `ideate`: generate plan ideas from lightweight user context and optionally apply one
 - `insight`: generate viewpoint-expansion insight pack and optionally apply it
 - `review`: run cycle-based planning review with recommendations and next questions

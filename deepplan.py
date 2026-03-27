@@ -628,6 +628,28 @@ def diff_plan_fields(current_plan: Dict, target_plan: Dict) -> List[str]:
     return changed
 
 
+def summarize_diff_value(value):
+    if isinstance(value, list):
+        return {"type": "array", "count": len(value)}
+    if isinstance(value, dict):
+        return {"type": "object", "keys": sorted(value.keys())}
+    text = str(value)
+    return {"type": "scalar", "value": text[:120]}
+
+
+def structured_plan_diff(current_plan: Dict, target_plan: Dict) -> List[Dict]:
+    diff: List[Dict] = []
+    for field in diff_plan_fields(current_plan, target_plan):
+        diff.append(
+            {
+                "field": field,
+                "before": summarize_diff_value(current_plan.get(field)),
+                "after": summarize_diff_value(target_plan.get(field)),
+            }
+        )
+    return diff
+
+
 def restore_preview(revision_id: str) -> Dict:
     current_plan = load_plan()
     revision = get_revision(revision_id)
@@ -635,6 +657,7 @@ def restore_preview(revision_id: str) -> Dict:
     current_fingerprint = plan_fingerprint(current_plan)
     target_fingerprint = plan_fingerprint(target_plan)
     changed_fields = diff_plan_fields(current_plan, target_plan)
+    structured_diff = structured_plan_diff(current_plan, target_plan)
     return {
         "revision_id": revision["revision_id"],
         "source": revision.get("source", ""),
@@ -644,6 +667,7 @@ def restore_preview(revision_id: str) -> Dict:
         "target_fingerprint": target_fingerprint,
         "changed_fields": changed_fields,
         "change_count": len(changed_fields),
+        "diff": structured_diff,
         "no_op": current_fingerprint == target_fingerprint,
         "current_summary": plan_summary(current_plan),
         "target_summary": plan_summary(target_plan),
@@ -1812,10 +1836,15 @@ def cmd_restore(args: argparse.Namespace) -> None:
                 print(f"Target Goal: {preview['metadata']['goal']}")
         print(f"No-op: {'yes' if preview['no_op'] else 'no'}")
         print(f"Change Count: {preview['change_count']}")
-        if preview["changed_fields"]:
+        if preview["diff"]:
             print("Changed Fields:")
-            for field in preview["changed_fields"]:
-                print(f"- {field}")
+            for item in preview["diff"]:
+                before = item["before"]
+                after = item["after"]
+                if before["type"] == "scalar" and after["type"] == "scalar":
+                    print(f"- {item['field']}: {before.get('value', '')} -> {after.get('value', '')}")
+                else:
+                    print(f"- {item['field']}: {before['type']} -> {after['type']}")
         return
 
     revision = get_revision(args.revision_id)

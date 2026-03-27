@@ -205,6 +205,7 @@ class DeepPlanServerTests(unittest.TestCase):
         self.assertIn("changed_fields", payload["result"])
         self.assertIn("goal", payload["result"]["changed_fields"])
         self.assertIn("metadata", payload["result"])
+        self.assertIn("diff", payload["result"])
 
     def test_restore_revision_tool_wrapper_rejects_stale_fingerprint(self):
         with DeepPlanStateIsolation():
