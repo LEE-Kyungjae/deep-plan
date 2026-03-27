@@ -48,6 +48,18 @@ class DeepPlanStateIsolation:
 
 
 class DeepPlanRegressionTests(unittest.TestCase):
+    def test_slash_command_mapping_covers_restore_preview(self):
+        tool_name, payload = deepplan_agent.slash_to_tool("/deepplan.restore-preview revision_id=rev-123")
+
+        self.assertEqual(tool_name, "preview_restore")
+        self.assertEqual(payload, {"revision_id": "rev-123"})
+
+    def test_natural_language_mapping_covers_restore_revision(self):
+        tool_name, payload = deepplan_agent.natural_language_to_tool("restore revision revision_id=rev-456")
+
+        self.assertEqual(tool_name, "restore_revision")
+        self.assertEqual(payload, {"revision_id": "rev-456"})
+
     def test_qa_autoreplan_upgrades_thin_plan_to_pass(self):
         plan = deepplan.default_plan()
         plan["goal"] = "Test goal"
@@ -583,6 +595,24 @@ class DeepPlanRegressionTests(unittest.TestCase):
         output = stdout.getvalue()
 
         self.assertIn("Schema Match: yes", output)
+
+    def test_cmd_run_dry_run_returns_restore_preview_envelope(self):
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            deepplan_agent.cmd_run(
+                type(
+                    "Args",
+                    (),
+                    {
+                        "input": "/deepplan.restore-preview revision_id=rev-789",
+                        "dry_run": True,
+                    },
+                )()
+            )
+        payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(payload["tool"], "preview_restore")
+        self.assertEqual(payload["input"], {"revision_id": "rev-789"})
 
 
 if __name__ == "__main__":

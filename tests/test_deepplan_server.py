@@ -206,6 +206,73 @@ class DeepPlanServerTests(unittest.TestCase):
         self.assertIn("goal", payload["result"]["changed_fields"])
         self.assertIn("metadata", payload["result"])
 
+    def test_restore_revision_tool_wrapper_rejects_stale_fingerprint(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            first_get = build_handler("GET", "/plan")
+            first_get.do_GET()
+            _status, initial_payload, initial_headers = decode_response(first_get)
+
+            first_update = build_handler(
+                "POST",
+                "/plan",
+                body=json.dumps({"goal": "first restore baseline"}).encode("utf-8"),
+                headers={"Content-Type": "application/json", "If-Match": initial_headers["ETag"]},
+            )
+            first_update.do_POST()
+
+            history = build_handler("GET", "/history")
+            history.do_GET()
+            _status, history_payload, _headers = decode_response(history)
+
+            second_update = build_handler(
+                "POST",
+                "/plan",
+                body=json.dumps({"goal": "second restore baseline"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            second_update.do_POST()
+
+            stale_restore = build_handler(
+                "POST",
+                "/tools/restore_revision",
+                body=json.dumps({"input": {"revision_id": history_payload["revisions"][-1]["revision_id"]}}).encode("utf-8"),
+                headers={"Content-Type": "application/json", "If-Match": f'"{initial_payload["fingerprint"]}"'},
+            )
+            stale_restore.do_POST()
+            status, payload, response_headers = decode_response(stale_restore)
+
+        self.assertEqual(status, 412)
+        self.assertEqual(payload["error"], "plan fingerprint mismatch")
+        self.assertIn("current_fingerprint", payload)
+        self.assertEqual(response_headers.get("ETag"), f'"{payload["current_fingerprint"]}"')
+
+    def test_agent_act_maps_restore_preview_command(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            update = build_handler(
+                "POST",
+                "/plan",
+                body=json.dumps({"goal": "agent act preview"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            update.do_POST()
+            history = build_handler("GET", "/history")
+            history.do_GET()
+            _status, history_payload, _headers = decode_response(history)
+            handler = build_handler(
+                "POST",
+                "/agent/act",
+                body=json.dumps({"input": f"/deepplan.restore-preview revision_id={history_payload['revisions'][-1]['revision_id']}"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            handler.do_POST()
+            status, payload, _headers = decode_response(handler)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["tool"], "preview_restore")
+        self.assertIn("changed_fields", payload["result"])
+
 
 if __name__ == "__main__":
     unittest.main()
