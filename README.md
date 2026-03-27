@@ -187,6 +187,7 @@ python3 deepplan_server.py --port 8787
 - `risk`: add risk record
 - `qa`: run QA checks manually
 - `validate`: validate plan structure and nested record types
+- `schema`: print the runtime schema, check for drift, or rewrite `schemas/plan.schema.json`
 - `health`: print storage health, parseability, and recovery diagnostics
 - `show`: print current plan summary, including the latest auto-replan signal when present
 - `history`: print recent revision snapshots
@@ -204,6 +205,7 @@ python3 deepplan_server.py --port 8787
 make check
 make test
 make compile
+make schema-check
 ```
 
 ## HTTP Service
@@ -279,6 +281,7 @@ python3 deepplan_agent.py run --input '/deepplan.history'
 python3 deepplan_agent.py run --input '/deepplan.evidence claim="Repeated planning pain" source=interviews confidence=72 axis=market'
 python3 deepplan_agent.py run --input 'show plan'
 python3 deepplan_agent.py run --input 'qa'
+python3 deepplan.py schema --check
 ```
 
 Supported slash commands:
@@ -324,5 +327,6 @@ Natural-language examples:
 - `.deeplan/decisions.jsonl`
 - `.deeplan/risks.jsonl`
 - `.deeplan/events.jsonl`
+- `.deeplan/revisions.jsonl`
 
 This is intentionally minimal and meant to be used by AI agents (Codex/Claude Code) as a common local planning primitive.

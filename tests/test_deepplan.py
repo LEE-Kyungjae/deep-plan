@@ -564,6 +564,21 @@ class DeepPlanRegressionTests(unittest.TestCase):
         self.assertIn("Revision Count:", output)
         self.assertIn("Writable:", output)
 
+    def test_runtime_schema_matches_checked_in_schema(self):
+        report = deepplan.schema_drift_report()
+
+        self.assertTrue(report["matches"])
+        self.assertEqual(report["runtime_required_count"], report["file_required_count"])
+        self.assertEqual(report["runtime_property_count"], report["file_property_count"])
+
+    def test_cmd_schema_check_prints_contract_status(self):
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            deepplan.cmd_schema(type("Args", (), {"check": True, "write": False, "json": False})())
+        output = stdout.getvalue()
+
+        self.assertIn("Schema Match: yes", output)
+
 
 if __name__ == "__main__":
     unittest.main()

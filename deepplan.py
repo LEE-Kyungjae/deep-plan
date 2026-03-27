@@ -219,6 +219,126 @@ def validate_plan_shape(plan: Dict) -> Dict:
     return {"valid": len(errors) == 0, "errors": errors}
 
 
+def build_plan_schema() -> Dict:
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://deepplan.local/schemas/plan.schema.json",
+        "title": "DeepPlan",
+        "type": "object",
+        "required": list(default_plan().keys()),
+        "properties": {
+            "version": {"type": "string"},
+            "updated_at": {"type": "string"},
+            "goal": {"type": "string"},
+            "success_metric": {"type": "string"},
+            "deadline": {"type": "string"},
+            "planning_horizon": {"type": "string"},
+            "review_cadence": {"type": "string"},
+            "phase_plan": {"type": "array", "items": {"type": "string"}},
+            "constraints": {"type": "array", "items": {"type": "string"}},
+            "assumptions": {"type": "array", "items": {"type": "string"}},
+            "options": {"type": "array", "items": {"type": "string"}},
+            "selected_option": {"type": "string"},
+            "plan_tasks": {"type": "array", "items": {"type": "string"}},
+            "execution_tasks": {"type": "array", "items": {"type": "string"}},
+            "dependencies": {"type": "array", "items": {"type": "string"}},
+            "experiments": {"type": "array", "items": {"type": "string"}},
+            "risks": {
+                "type": "array",
+                "items": {
+                    "oneOf": [
+                        {"type": "string"},
+                        {
+                            "type": "object",
+                            "required": ["risk", "signal", "mitigation"],
+                            "properties": {
+                                "risk": {"type": "string"},
+                                "signal": {"type": "string"},
+                                "mitigation": {"type": "string"},
+                            },
+                            "additionalProperties": True,
+                        },
+                    ]
+                },
+            },
+            "references": {"type": "array", "items": {"type": "string"}},
+            "insights": {"type": "array", "items": {"type": "string"}},
+            "direction_insights": {"type": "array", "items": {"type": "string"}},
+            "market_insights": {"type": "array", "items": {"type": "string"}},
+            "timing_insights": {"type": "array", "items": {"type": "string"}},
+            "differentiation_insights": {"type": "array", "items": {"type": "string"}},
+            "monetization_insights": {"type": "array", "items": {"type": "string"}},
+            "constraint_insights": {"type": "array", "items": {"type": "string"}},
+            "risk_signal_insights": {"type": "array", "items": {"type": "string"}},
+            "evolution_insights": {"type": "array", "items": {"type": "string"}},
+            "definition_of_done": {"type": "array", "items": {"type": "string"}},
+            "evidence": {
+                "type": "array",
+                "items": {
+                    "oneOf": [
+                        {"type": "string"},
+                        {
+                            "type": "object",
+                            "required": ["claim", "source", "confidence", "date"],
+                            "properties": {
+                                "claim": {"type": "string"},
+                                "source": {"type": "string"},
+                                "confidence": {"type": "integer", "minimum": 0, "maximum": 100},
+                                "axis": {"type": "string"},
+                                "date": {"type": "string"},
+                            },
+                            "additionalProperties": True,
+                        },
+                    ]
+                },
+            },
+            "hypothesis_log": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["ts", "hypothesis", "status"],
+                    "properties": {
+                        "ts": {"type": "string"},
+                        "hypothesis": {"type": "string"},
+                        "metric": {"type": "string"},
+                        "target": {"type": "string"},
+                        "window": {"type": "string"},
+                        "status": {
+                            "type": "string",
+                            "enum": ["open", "validated", "invalidated", "pivoted"],
+                        },
+                        "outcome": {"type": "string"},
+                    },
+                    "additionalProperties": True,
+                },
+            },
+        },
+        "additionalProperties": True,
+    }
+
+
+def schema_path() -> Path:
+    return ROOT / "schemas" / "plan.schema.json"
+
+
+def load_plan_schema() -> Dict:
+    return json.loads(schema_path().read_text(encoding="utf-8"))
+
+
+def schema_drift_report() -> Dict:
+    runtime_schema = build_plan_schema()
+    file_schema = load_plan_schema()
+    matches = runtime_schema == file_schema
+    return {
+        "matches": matches,
+        "schema_path": str(schema_path()),
+        "runtime_required_count": len(runtime_schema.get("required", [])),
+        "file_required_count": len(file_schema.get("required", [])),
+        "runtime_property_count": len(runtime_schema.get("properties", {})),
+        "file_property_count": len(file_schema.get("properties", {})),
+    }
+
+
 def ensure_non_empty_text(value: str, field_name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field_name} must be a non-empty string")
@@ -1555,6 +1675,27 @@ def cmd_validate(_: argparse.Namespace) -> None:
     print(json.dumps(report, indent=2, ensure_ascii=False))
 
 
+def cmd_schema(args: argparse.Namespace) -> None:
+    runtime_schema = build_plan_schema()
+    if args.check:
+        report = schema_drift_report()
+        if args.json:
+            print(json.dumps(report, indent=2, ensure_ascii=False))
+        else:
+            print(f"Schema Match: {'yes' if report['matches'] else 'no'}")
+            print(f"Schema Path: {report['schema_path']}")
+            print(f"Runtime Properties: {report['runtime_property_count']}")
+            print(f"File Properties: {report['file_property_count']}")
+        if not report["matches"]:
+            raise SystemExit("schema drift detected")
+        return
+    if args.write:
+        schema_path().write_text(json.dumps(runtime_schema, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        print(f"Wrote schema to {schema_path()}")
+        return
+    print(json.dumps(runtime_schema, indent=2, ensure_ascii=False))
+
+
 def cmd_health(args: argparse.Namespace) -> None:
     report = storage_health_report()
     if args.json:
@@ -2041,6 +2182,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("validate")
     s.set_defaults(func=cmd_validate)
+
+    s = sub.add_parser("schema")
+    s.add_argument("--check", action="store_true")
+    s.add_argument("--write", action="store_true")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(func=cmd_schema)
 
     s = sub.add_parser("health")
     s.add_argument("--json", action="store_true")
