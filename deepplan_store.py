@@ -30,6 +30,7 @@ class FilePlanStore:
         normalize_fingerprint: Callable[[Optional[str]], str],
         ensure_valid_plan: Callable[[Dict], Dict],
         qa_autoreplan_result: Callable[..., Dict],
+        revision_metadata_builder: Optional[Callable[[Dict], Dict]] = None,
         lock: Optional[threading.RLock] = None,
     ) -> None:
         self.state_dir = state_dir
@@ -45,6 +46,7 @@ class FilePlanStore:
         self.normalize_fingerprint = normalize_fingerprint
         self.ensure_valid_plan = ensure_valid_plan
         self.qa_autoreplan_result = qa_autoreplan_result
+        self.revision_metadata_builder = revision_metadata_builder
         self.lock = lock or threading.RLock()
 
     def ensure_state(self) -> None:
@@ -104,7 +106,7 @@ class FilePlanStore:
     def make_revision_entry(self, plan: Dict, source: str, reason: str = "", previous_fingerprint: str = "") -> Dict:
         fingerprint = self.plan_fingerprint(plan)
         ts = self.now_iso()
-        return {
+        entry = {
             "revision_id": f"{ts}_{fingerprint[:12]}",
             "ts": ts,
             "source": source,
@@ -113,6 +115,9 @@ class FilePlanStore:
             "previous_fingerprint": previous_fingerprint,
             "plan": json.loads(json.dumps(plan)),
         }
+        if self.revision_metadata_builder:
+            entry["metadata"] = self.revision_metadata_builder(plan)
+        return entry
 
     def append_revision_unlocked(self, plan: Dict, source: str, reason: str = "", previous_fingerprint: str = "") -> Dict:
         entry = self.make_revision_entry(plan, source, reason=reason, previous_fingerprint=previous_fingerprint)

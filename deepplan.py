@@ -386,6 +386,24 @@ def normalize_fingerprint(value: Optional[str]) -> str:
     return text.strip()
 
 
+def revision_metadata(plan: Dict) -> Dict:
+    qa = qa_report(plan)
+    summary = plan_summary(plan)
+    return {
+        "goal": str(plan.get("goal", "")).strip(),
+        "updated_at": str(plan.get("updated_at", "")).strip(),
+        "qa_result": qa["result"],
+        "qa_score": qa["score"],
+        "qa_threshold": qa["threshold"],
+        "reference_count": summary["reference_count"],
+        "evidence_count": summary["evidence_count"],
+        "risk_count": summary["risk_count"],
+        "hypothesis_count": summary["hypothesis_count"],
+        "plan_task_count": summary["plan_task_count"],
+        "execution_task_count": summary["execution_task_count"],
+    }
+
+
 STORE = FilePlanStore(
     state_dir=STATE_DIR,
     plan_path=PLAN_PATH,
@@ -400,6 +418,7 @@ STORE = FilePlanStore(
     normalize_fingerprint=normalize_fingerprint,
     ensure_valid_plan=ensure_valid_plan,
     qa_autoreplan_result=lambda *args, **kwargs: qa_autoreplan_result(*args, **kwargs),
+    revision_metadata_builder=revision_metadata,
 )
 STATE_LOCK = STORE.lock
 
@@ -620,6 +639,7 @@ def restore_preview(revision_id: str) -> Dict:
         "revision_id": revision["revision_id"],
         "source": revision.get("source", ""),
         "reason": revision.get("reason", ""),
+        "metadata": revision.get("metadata", {}),
         "current_fingerprint": current_fingerprint,
         "target_fingerprint": target_fingerprint,
         "changed_fields": changed_fields,
@@ -1767,7 +1787,13 @@ def cmd_history(args: argparse.Namespace) -> None:
         return
     for item in revisions:
         reason = f" | {item['reason']}" if item.get("reason") else ""
-        print(f"{item['revision_id']} | {item['ts']} | {item['source']}{reason}")
+        metadata = item.get("metadata", {})
+        qa_label = ""
+        if metadata.get("qa_result"):
+            qa_label = f" | qa={metadata['qa_result']}:{metadata.get('qa_score', 0)}"
+        goal = metadata.get("goal", "")
+        goal_label = f" | goal={goal}" if goal else ""
+        print(f"{item['revision_id']} | {item['ts']} | {item['source']}{reason}{qa_label}{goal_label}")
 
 
 def cmd_restore(args: argparse.Namespace) -> None:
@@ -1780,6 +1806,10 @@ def cmd_restore(args: argparse.Namespace) -> None:
         print(f"Source: {preview['source']}")
         if preview["reason"]:
             print(f"Reason: {preview['reason']}")
+        if preview["metadata"]:
+            print(f"Target QA: {preview['metadata'].get('qa_result', '')} ({preview['metadata'].get('qa_score', 0)})")
+            if preview["metadata"].get("goal"):
+                print(f"Target Goal: {preview['metadata']['goal']}")
         print(f"No-op: {'yes' if preview['no_op'] else 'no'}")
         print(f"Change Count: {preview['change_count']}")
         if preview["changed_fields"]:

@@ -445,6 +445,8 @@ class DeepPlanRegressionTests(unittest.TestCase):
 
         self.assertGreaterEqual(len(history["revisions"]), 2)
         self.assertEqual(history["revisions"][0]["source"], "update_plan")
+        self.assertIn("metadata", history["revisions"][0])
+        self.assertEqual(history["revisions"][0]["metadata"]["qa_result"], "PASS")
         self.assertEqual(restored["restored_revision_id"], history["revisions"][-1]["revision_id"])
         self.assertEqual(restored["plan"]["goal"], "first goal")
         self.assertEqual(restored["fingerprint"], deepplan.plan_fingerprint(restored["plan"]))
@@ -479,6 +481,7 @@ class DeepPlanRegressionTests(unittest.TestCase):
 
         self.assertIn(revisions[0]["revision_id"], history_stdout.getvalue())
         self.assertIn("Restored revision", restore_stdout.getvalue())
+        self.assertIn("qa=", history_stdout.getvalue())
 
     def test_preview_restore_reports_changed_fields_without_mutation(self):
         with DeepPlanStateIsolation():
@@ -509,6 +512,8 @@ class DeepPlanRegressionTests(unittest.TestCase):
 
         self.assertFalse(preview["no_op"])
         self.assertIn("goal", preview["changed_fields"])
+        self.assertIn("metadata", preview)
+        self.assertEqual(preview["metadata"]["goal"], "preview first goal")
         self.assertEqual(current_plan["goal"], "preview second goal")
         self.assertEqual(preview["current_fingerprint"], second["fingerprint"])
 

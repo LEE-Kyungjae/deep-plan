@@ -158,6 +158,7 @@ class DeepPlanServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(payload["revisions"])
         self.assertEqual(payload["revisions"][0]["source"], "update_plan")
+        self.assertIn("metadata", payload["revisions"][0])
 
     def test_get_health_returns_storage_diagnostics(self):
         with DeepPlanStateIsolation():
@@ -203,6 +204,7 @@ class DeepPlanServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("changed_fields", payload["result"])
         self.assertIn("goal", payload["result"]["changed_fields"])
+        self.assertIn("metadata", payload["result"])
 
 
 if __name__ == "__main__":
