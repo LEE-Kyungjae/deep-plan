@@ -1,0 +1,381 @@
+#!/usr/bin/env python3
+import io
+import json
+import tempfile
+import unittest
+from contextlib import redirect_stdout
+from pathlib import Path
+
+import deepplan
+import deepplan_agent
+
+
+class DeepPlanStateIsolation:
+    def __init__(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        self.state_dir = self.root / ".deeplan"
+        self.originals = {}
+
+    def __enter__(self):
+        self.originals = {
+            "ROOT": deepplan.ROOT,
+            "STATE_DIR": deepplan.STATE_DIR,
+            "PLAN_PATH": deepplan.PLAN_PATH,
+            "DECISIONS_PATH": deepplan.DECISIONS_PATH,
+            "RISKS_PATH": deepplan.RISKS_PATH,
+            "EVENTS_PATH": deepplan.EVENTS_PATH,
+        }
+        deepplan.ROOT = self.root
+        deepplan.STATE_DIR = self.state_dir
+        deepplan.PLAN_PATH = self.state_dir / "plan.json"
+        deepplan.DECISIONS_PATH = self.state_dir / "decisions.jsonl"
+        deepplan.RISKS_PATH = self.state_dir / "risks.jsonl"
+        deepplan.EVENTS_PATH = self.state_dir / "events.jsonl"
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        deepplan.ROOT = self.originals["ROOT"]
+        deepplan.STATE_DIR = self.originals["STATE_DIR"]
+        deepplan.PLAN_PATH = self.originals["PLAN_PATH"]
+        deepplan.DECISIONS_PATH = self.originals["DECISIONS_PATH"]
+        deepplan.RISKS_PATH = self.originals["RISKS_PATH"]
+        deepplan.EVENTS_PATH = self.originals["EVENTS_PATH"]
+        self.tempdir.cleanup()
+
+
+class DeepPlanRegressionTests(unittest.TestCase):
+    def test_qa_autoreplan_upgrades_thin_plan_to_pass(self):
+        plan = deepplan.default_plan()
+        plan["goal"] = "Test goal"
+        plan["success_metric"] = "Reach 3 pilot users"
+        plan["deadline"] = "2026-04-10"
+
+        with DeepPlanStateIsolation():
+            result = deepplan.qa_autoreplan_result(plan)
+
+        self.assertTrue(result["auto_replan"]["triggered"])
+        self.assertEqual(result["auto_replan"]["blocked"], [])
+        self.assertEqual(result["qa"]["result"], "PASS")
+        self.assertEqual(result["qa"]["result"], "PASS")
+        self.assertGreaterEqual(result["qa"]["score"], result["qa"]["threshold"])
+        self.assertTrue(result["plan"]["planning_horizon"])
+        self.assertTrue(result["plan"]["review_cadence"])
+        self.assertGreaterEqual(len(result["plan"]["references"]), 3)
+
+    def test_qa_autoreplan_blocks_manual_core_fields(self):
+        plan = deepplan.default_plan()
+
+        with DeepPlanStateIsolation():
+            result = deepplan.qa_autoreplan_result(plan)
+
+        self.assertTrue(result["auto_replan"]["triggered"])
+        self.assertIn("goal_clarity", result["auto_replan"]["blocked"])
+        self.assertIn("measurability", result["auto_replan"]["blocked"])
+        self.assertEqual(result["qa"]["result"], "CRITICAL_FAILURE")
+
+    def test_update_plan_tool_returns_autoreplan_metadata(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            result = deepplan_agent.execute_tool(
+                "update_plan",
+                {
+                    "goal": "Thin plan test",
+                    "success_metric": "Hit 2 pilots",
+                    "deadline": "2026-04-01",
+                    "constraints": [],
+                    "assumptions": [],
+                    "options": [],
+                    "plan_tasks": [],
+                    "execution_tasks": [],
+                    "dependencies": [],
+                    "experiments": [],
+                    "risks": [],
+                    "references": [],
+                    "insights": [],
+                    "direction_insights": [],
+                    "market_insights": [],
+                    "timing_insights": [],
+                    "differentiation_insights": [],
+                    "monetization_insights": [],
+                    "constraint_insights": [],
+                    "risk_signal_insights": [],
+                    "evolution_insights": [],
+                    "definition_of_done": [],
+                },
+            )
+            event_lines = deepplan.EVENTS_PATH.read_text(encoding="utf-8").strip().splitlines()
+            auto_replan_events = [json.loads(line) for line in event_lines if '"type": "auto_replan"' in line]
+            summary = deepplan.plan_summary(result["plan"])
+
+        self.assertIn("auto_replan", result)
+        self.assertTrue(result["auto_replan"]["triggered"])
+        self.assertEqual(result["auto_replan"]["blocked"], [])
+        self.assertEqual(result["qa"]["result"], "PASS")
+        self.assertEqual(result["validation"], {"valid": True, "errors": []})
+        self.assertTrue(auto_replan_events)
+        self.assertIn("final_score", auto_replan_events[-1])
+        self.assertIn("score_delta", auto_replan_events[-1])
+        self.assertIsNotNone(summary["recent_auto_replan"])
+        self.assertEqual(summary["recent_auto_replan"]["final_result"], "PASS")
+        self.assertTrue(summary["recent_auto_replan"]["actions"])
+
+    def test_replan_tool_validates_confidence_type(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            with self.assertRaisesRegex(ValueError, "evidence_confidence must be an integer"):
+                deepplan_agent.execute_tool(
+                    "replan",
+                    {
+                        "evidence": "pilot feedback",
+                        "evidence_confidence": "high",
+                    },
+                )
+
+    def test_replan_tool_persists_incremental_fields_and_metadata(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            deepplan_agent.execute_tool(
+                "update_plan",
+                {
+                    "goal": "Seed plan",
+                    "success_metric": "Reach 2 pilots",
+                    "deadline": "2026-04-03",
+                    "constraints": [],
+                    "assumptions": [],
+                    "options": [],
+                    "plan_tasks": [],
+                    "execution_tasks": [],
+                    "dependencies": [],
+                    "experiments": [],
+                    "risks": [],
+                    "references": [],
+                    "insights": [],
+                    "direction_insights": [],
+                    "market_insights": [],
+                    "timing_insights": [],
+                    "differentiation_insights": [],
+                    "monetization_insights": [],
+                    "constraint_insights": [],
+                    "risk_signal_insights": [],
+                    "evolution_insights": [],
+                    "definition_of_done": [],
+                },
+            )
+            result = deepplan_agent.execute_tool(
+                "replan",
+                {
+                    "evidence": "pilot users returned after week one",
+                    "evidence_confidence": 71,
+                    "evidence_axis": "market",
+                    "plan_task": "Refine segment definition",
+                    "execution_task": "Interview three pilot users",
+                    "reference": "pilot:week-1",
+                },
+            )
+
+        self.assertIn("summary", result)
+        self.assertIn("validation", result)
+        self.assertIn("auto_replan", result)
+        self.assertEqual(result["validation"], {"valid": True, "errors": []})
+        self.assertEqual(result["qa"]["result"], "PASS")
+        self.assertIn("Refine segment definition", result["plan"]["plan_tasks"])
+        self.assertIn("Interview three pilot users", result["plan"]["execution_tasks"])
+        self.assertIn("pilot:week-1", result["plan"]["references"])
+        self.assertTrue(
+            any(
+                isinstance(item, dict) and item.get("claim") == "pilot users returned after week one"
+                for item in result["plan"]["evidence"]
+            )
+        )
+
+    def test_blocked_autoreplan_event_has_no_final_score(self):
+        plan = deepplan.default_plan()
+
+        with DeepPlanStateIsolation():
+            result = deepplan.qa_autoreplan_result(plan)
+            events = [json.loads(line) for line in deepplan.EVENTS_PATH.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+        self.assertTrue(result["auto_replan"]["triggered"])
+        self.assertTrue(result["auto_replan"]["blocked"])
+        auto_replan_events = [event for event in events if event.get("type") == "auto_replan"]
+        self.assertEqual(len(auto_replan_events), 1)
+        self.assertNotIn("final_score", auto_replan_events[0])
+        self.assertNotIn("score_delta", auto_replan_events[0])
+
+    def test_no_autoreplan_does_not_emit_autoreplan_event(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            plan = deepplan.load_plan()
+            plan.update(
+                {
+                    "goal": "Complete plan",
+                    "success_metric": "Reach 3 pilots",
+                    "deadline": "2026-04-05",
+                    "planning_horizon": "3 weeks",
+                    "review_cadence": "weekly",
+                    "constraints": ["time: 1h/day"],
+                    "assumptions": ["Target users have recurring pain."],
+                    "options": ["Option A", "Option B"],
+                    "selected_option": "Option A",
+                    "plan_tasks": ["Define references", "Choose strategy"],
+                    "execution_tasks": ["Run pilot", "Track outcomes"],
+                    "dependencies": ["Agent runtime support"],
+                    "experiments": ["Run one pilot loop."],
+                    "risks": [{"risk": "Scope drift", "signal": "new requests", "mitigation": "freeze scope"}],
+                    "references": ["ref-a", "ref-b", "ref-c"],
+                    "insights": ["Planning matters", "Evidence matters", "Replan from signals"],
+                    "direction_insights": ["why now", "decision leverage", "deprioritize distractions"],
+                    "market_insights": ["target segment pain", "high-frequency need", "switching pain"],
+                    "timing_insights": ["window is open", "delay costs learning", "market timing matters"],
+                    "differentiation_insights": ["distinct angle", "visible first-session difference", "clear tradeoff"],
+                    "monetization_insights": ["value to revenue path", "early pricing proxy", "paid signal"],
+                    "constraint_insights": ["time limited", "resource cap", "scope cap"],
+                    "risk_signal_insights": ["early churn signal", "false momentum metric", "replan trigger"],
+                    "evolution_insights": ["weekly plan review", "review evidence", "compound learning"],
+                    "definition_of_done": ["QA passes", "pilot is measured"],
+                    "evidence": [
+                        {"claim": "Users repeated pain weekly", "source": "interviews", "confidence": 72, "axis": "market", "date": "2026-03-20"},
+                        {"claim": "Alternatives fail core workflow", "source": "competitor-review", "confidence": 70, "axis": "differentiation", "date": "2026-03-20"},
+                        {"claim": "Users pay for time savings", "source": "pricing-survey", "confidence": 66, "axis": "monetization", "date": "2026-03-20"},
+                    ],
+                    "hypothesis_log": [
+                        {"ts": "2026-03-20T00:00:00+00:00", "hypothesis": "Narrow segment returns weekly", "metric": "wau", "target": ">=3", "window": "7 days", "status": "open", "outcome": ""}
+                    ],
+                    "phase_plan": ["Phase 1", "Phase 2", "Phase 3"],
+                }
+            )
+            deepplan.save_validated_plan(plan)
+            result = deepplan.qa_autoreplan_result(plan)
+            events = [json.loads(line) for line in deepplan.EVENTS_PATH.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+        self.assertFalse(result["auto_replan"]["triggered"])
+        self.assertFalse(any(event.get("type") == "auto_replan" for event in events))
+
+    def test_critical_failure_can_still_trigger_autoreplan_when_score_is_high(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            plan = deepplan.load_plan()
+            plan.update(
+                {
+                    "goal": "High score critical failure",
+                    "success_metric": "Reach 3 pilots",
+                    "deadline": "2026-04-05",
+                    "planning_horizon": "3 weeks",
+                    "review_cadence": "weekly",
+                    "constraints": ["time: 1h/day"],
+                    "assumptions": ["Users have recurring pain."],
+                    "options": ["Option A", "Option B"],
+                    "selected_option": "Option A",
+                    "plan_tasks": ["Define references", "Choose strategy"],
+                    "execution_tasks": ["Run pilot", "Track outcomes"],
+                    "dependencies": ["Agent runtime support"],
+                    "experiments": ["Run one pilot loop."],
+                    "risks": [{"risk": "Scope drift", "signal": "new requests", "mitigation": "freeze scope"}],
+                    "references": ["ref-a", "ref-b", "ref-c"],
+                    "insights": ["Planning matters", "Evidence matters", "Replan from signals"],
+                    "direction_insights": ["why now", "decision leverage", "deprioritize distractions"],
+                    "market_insights": ["target segment pain", "high-frequency need", "switching pain"],
+                    "timing_insights": ["window is open", "delay costs learning", "market timing matters"],
+                    "differentiation_insights": ["distinct angle", "visible first-session difference", "clear tradeoff"],
+                    "monetization_insights": ["value to revenue path", "early pricing proxy", "paid signal"],
+                    "constraint_insights": ["time limited", "resource cap", "scope cap"],
+                    "risk_signal_insights": ["early churn signal", "false momentum metric", "replan trigger"],
+                    "evolution_insights": ["weekly plan review", "review evidence", "compound learning"],
+                    "definition_of_done": [],
+                    "evidence": [
+                        {"claim": "Users repeated pain weekly", "source": "interviews", "confidence": 72, "axis": "market", "date": "2026-03-20"},
+                        {"claim": "Alternatives fail core workflow", "source": "competitor-review", "confidence": 70, "axis": "differentiation", "date": "2026-03-20"},
+                        {"claim": "Users pay for time savings", "source": "pricing-survey", "confidence": 66, "axis": "monetization", "date": "2026-03-20"},
+                    ],
+                    "hypothesis_log": [
+                        {"ts": "2026-03-20T00:00:00+00:00", "hypothesis": "Narrow segment returns weekly", "metric": "wau", "target": ">=3", "window": "7 days", "status": "open", "outcome": ""}
+                    ],
+                    "phase_plan": ["Phase 1", "Phase 2", "Phase 3"],
+                }
+            )
+            result = deepplan.qa_autoreplan_result(plan)
+
+        self.assertTrue(result["auto_replan"]["triggered"])
+        self.assertEqual(result["auto_replan"]["blocked"], [])
+        self.assertEqual(result["qa"]["result"], "PASS")
+        self.assertTrue(result["plan"]["definition_of_done"])
+
+    def test_plan_summary_ignores_stale_autoreplan_event(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            deepplan_agent.execute_tool(
+                "update_plan",
+                {
+                    "goal": "Summary freshness",
+                    "success_metric": "Reach 2 pilots",
+                    "deadline": "2026-04-03",
+                    "constraints": [],
+                    "assumptions": [],
+                    "options": [],
+                    "plan_tasks": [],
+                    "execution_tasks": [],
+                    "dependencies": [],
+                    "experiments": [],
+                    "risks": [],
+                    "references": [],
+                    "insights": [],
+                    "direction_insights": [],
+                    "market_insights": [],
+                    "timing_insights": [],
+                    "differentiation_insights": [],
+                    "monetization_insights": [],
+                    "constraint_insights": [],
+                    "risk_signal_insights": [],
+                    "evolution_insights": [],
+                    "definition_of_done": [],
+                },
+            )
+            plan = deepplan.load_plan()
+            plan["goal"] = "Manual follow-up edit"
+            deepplan.save_validated_plan(plan)
+            summary = deepplan.plan_summary(plan)
+
+        self.assertIsNone(summary["recent_auto_replan"])
+
+    def test_show_prints_recent_auto_replan_summary(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            deepplan_agent.execute_tool(
+                "update_plan",
+                {
+                    "goal": "Show summary test",
+                    "success_metric": "Reach 2 pilots",
+                    "deadline": "2026-04-03",
+                    "constraints": [],
+                    "assumptions": [],
+                    "options": [],
+                    "plan_tasks": [],
+                    "execution_tasks": [],
+                    "dependencies": [],
+                    "experiments": [],
+                    "risks": [],
+                    "references": [],
+                    "insights": [],
+                    "direction_insights": [],
+                    "market_insights": [],
+                    "timing_insights": [],
+                    "differentiation_insights": [],
+                    "monetization_insights": [],
+                    "constraint_insights": [],
+                    "risk_signal_insights": [],
+                    "evolution_insights": [],
+                    "definition_of_done": [],
+                },
+            )
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                deepplan.cmd_show(None)
+            output = stdout.getvalue()
+
+        self.assertIn("Recent Auto Replan:", output)
+        self.assertIn("Recent Auto Replan Actions:", output)
+
+
+if __name__ == "__main__":
+    unittest.main()

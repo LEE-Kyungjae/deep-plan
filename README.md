@@ -85,12 +85,13 @@ In this thesis:
 
 ## What It Provides
 
-- Shared plan format (`schemas/plan.schema.json`)
+- Shared/exportable plan format (`schemas/plan.schema.json`)
 - CLI (`deepplan.py`)
 - Minimal local HTTP service (`deepplan_server.py`)
 - Agent wrapper + tool schema (`deepplan_agent.py`)
 - Automatic quality checks on `plan` and `replan`
-- Local state in `/.deeplan/`
+- Local regression checks (`Makefile`, `tests/test_deepplan.py`)
+- Repo-local state in `.deeplan/`
 
 ## Evidence + Hypothesis Loop
 
@@ -168,8 +169,11 @@ python3 deepplan.py hypothesis --hypothesis "Narrow segment will adopt weekly" -
 python3 deepplan.py insight --topic "AI planning co-work" --references "success:linear,fail:overbuild,counter:no-code tools" --apply
 python3 deepplan.py review --period "week-1" --signals "low-activation,weak-retention" --apply
 python3 deepplan.py show
+python3 deepplan.py validate
 python3 deepplan_agent.py tools
 python3 deepplan_agent.py run --input '/deepplan.qa'
+python3 deepplan_agent.py run --input '/deepplan.validate'
+python3 deepplan_agent.py run --input '/deepplan.replan evidence="pilot users reported repeated friction" evidence_confidence=75 evidence_axis=market'
 python3 deepplan_agent.py run --input 'show plan'
 python3 deepplan_server.py --port 8787
 ```
@@ -182,12 +186,21 @@ python3 deepplan_server.py --port 8787
 - `decide`: add decision record
 - `risk`: add risk record
 - `qa`: run QA checks manually
-- `show`: print current plan summary
+- `validate`: validate plan structure and nested record types
+- `show`: print current plan summary, including the latest auto-replan signal when present
 - `ideate`: generate plan ideas from lightweight user context and optionally apply one
 - `insight`: generate viewpoint-expansion insight pack and optionally apply it
 - `review`: run cycle-based planning review with recommendations and next questions
 - `evidence`: add structured evidence linked to planning axes
 - `hypothesis`: append testable hypothesis entries and optional test evidence
+
+## Dev Checks
+
+```bash
+make check
+make test
+make compile
+```
 
 ## HTTP Service
 
@@ -202,9 +215,11 @@ Available endpoints:
 - `GET /health`: service health check
 - `GET /plan`: full current plan + derived summary
 - `GET /qa`: QA report as JSON
+- `GET /validate`: structural validation report for the current plan
 - `GET /tools`: available tool schemas for agent/tool callers
-- `POST /plan`: update core plan fields using a JSON object
+- `POST /plan`: update core plan fields using a JSON object and run QA with auto-replan if needed
 - `POST /evidence`: append one evidence item using JSON
+- `POST /replan`: append execution evidence or incremental plan deltas and run QA with auto-replan if needed
 - `POST /tools/<tool_name>`: run one tool with `{"input": {...}}`
 - `POST /agent/act`: map slash/natural-language input to a tool call
 
@@ -213,10 +228,14 @@ Example:
 ```bash
 curl http://127.0.0.1:8787/plan
 curl http://127.0.0.1:8787/qa
+curl http://127.0.0.1:8787/validate
 curl http://127.0.0.1:8787/tools
 curl -X POST http://127.0.0.1:8787/evidence \
   -H 'Content-Type: application/json' \
   -d '{"claim":"User pain repeated in interviews","source":"interview-notes","confidence":72,"axis":"market"}'
+curl -X POST http://127.0.0.1:8787/replan \
+  -H 'Content-Type: application/json' \
+  -d '{"evidence":"Pilot users reported repeated friction","evidence_source":"pilot","evidence_confidence":75,"evidence_axis":"market"}'
 curl -X POST http://127.0.0.1:8787/tools/add_hypothesis \
   -H 'Content-Type: application/json' \
   -d '{"input":{"hypothesis":"Narrow segment returns weekly","metric":"weekly-active-pilot-users","target":">=20","window":"14 days"}}'
@@ -233,6 +252,7 @@ DeepPlan now includes a local wrapper for slash-style and lightweight natural-la
 python3 deepplan_agent.py tools
 python3 deepplan_agent.py run --input '/deepplan.show'
 python3 deepplan_agent.py run --input '/deepplan.plan goal="Ship local agent layer" planning_horizon="4 weeks" review_cadence=weekly'
+python3 deepplan_agent.py run --input '/deepplan.replan evidence="Pilot retention improved" evidence_confidence=70 evidence_axis=market'
 python3 deepplan_agent.py run --input '/deepplan.evidence claim="Repeated planning pain" source=interviews confidence=72 axis=market'
 python3 deepplan_agent.py run --input 'show plan'
 python3 deepplan_agent.py run --input 'qa'
@@ -240,26 +260,36 @@ python3 deepplan_agent.py run --input 'qa'
 
 Supported slash commands:
 
+- `/deepplan`
 - `/deepplan.plan`
+- `/deepplan.replan`
 - `/deepplan.show`
 - `/deepplan.qa`
+- `/deepplan.validate`
 - `/deepplan.evidence`
 - `/deepplan.hypothesis`
 
-## Slash Command Mapping
+## Agent Input Mapping
 
-If your agent supports slash commands, map them to CLI:
-- `/deepplan` -> `python3 deepplan.py plan ...`
-- `/deepplan.replan` -> `python3 deepplan.py replan ...`
-- `/deepplan.decide` -> `python3 deepplan.py decide ...`
-- `/deepplan.risk` -> `python3 deepplan.py risk ...`
-- `/deepplan.qa` -> `python3 deepplan.py qa`
+Bundled wrapper behavior:
+- `/deepplan` and `/deepplan.plan` -> `update_plan` tool payload
+- `/deepplan.replan` -> `replan` tool payload
+- `/deepplan.show` -> `get_plan`
+- `/deepplan.qa` -> `get_qa`
+- `/deepplan.validate` -> `validate_plan`
+- `/deepplan.evidence` -> `add_evidence`
+- `/deepplan.hypothesis` -> `add_hypothesis`
+
+Natural-language examples:
+- `python3 deepplan_agent.py run --input 'update plan goal=\"Ship local agent layer\" deadline=2026-04-15'`
+- `python3 deepplan_agent.py run --dry-run --input '/deepplan.replan evidence=\"Pilot users returned\" evidence_confidence=70 evidence_axis=market'`
+- `python3 deepplan.py ideate --profile "solo builder" --interests "automation,creator tools" --count 5 --apply 2`
 
 ## Storage
 
-- `/.deeplan/plan.json`
-- `/.deeplan/decisions.jsonl`
-- `/.deeplan/risks.jsonl`
-- `/.deeplan/events.jsonl`
+- `.deeplan/plan.json`
+- `.deeplan/decisions.jsonl`
+- `.deeplan/risks.jsonl`
+- `.deeplan/events.jsonl`
 
 This is intentionally minimal and meant to be used by AI agents (Codex/Claude Code) as a common local planning primitive.

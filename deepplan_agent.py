@@ -6,12 +6,16 @@ from typing import Any, Dict, List, Tuple
 
 from deepplan import (
     add_evidence,
+    apply_replan_payload,
     load_plan,
+    mutate_plan_state,
     now_iso,
     parse_csv,
     plan_summary,
+    qa_autoreplan_result,
     qa_report,
-    save_plan,
+    save_validated_plan,
+    validate_plan_shape,
 )
 
 
@@ -59,6 +63,39 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
         "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     {
+        "name": "validate_plan",
+        "description": "Validate the current DeepPlan plan structure and nested records.",
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
+        "name": "replan",
+        "description": "Append execution evidence or planning deltas and run QA with auto-replan if needed.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "evidence": {"type": "string"},
+                "evidence_source": {"type": "string"},
+                "evidence_confidence": {"type": "integer"},
+                "evidence_axis": {"type": "string"},
+                "evidence_date": {"type": "string"},
+                "plan_task": {"type": "string"},
+                "execution_task": {"type": "string"},
+                "phase": {"type": "string"},
+                "reference": {"type": "string"},
+                "insight": {"type": "string"},
+                "direction_insight": {"type": "string"},
+                "market_insight": {"type": "string"},
+                "timing_insight": {"type": "string"},
+                "differentiation_insight": {"type": "string"},
+                "monetization_insight": {"type": "string"},
+                "constraint_insight": {"type": "string"},
+                "risk_signal_insight": {"type": "string"},
+                "evolution_insight": {"type": "string"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "update_plan",
         "description": "Update top-level plan fields using scalar strings and list values.",
         "input_schema": {
@@ -78,7 +115,24 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
                 "execution_tasks": {"type": "array", "items": {"type": "string"}},
                 "dependencies": {"type": "array", "items": {"type": "string"}},
                 "experiments": {"type": "array", "items": {"type": "string"}},
-                "risks": {"type": "array", "items": {"type": "object"}},
+                "risks": {
+                    "type": "array",
+                    "items": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "risk": {"type": "string"},
+                                    "signal": {"type": "string"},
+                                    "mitigation": {"type": "string"},
+                                },
+                                "required": ["risk", "signal", "mitigation"],
+                                "additionalProperties": True,
+                            },
+                        ]
+                    },
+                },
                 "references": {"type": "array", "items": {"type": "string"}},
                 "insights": {"type": "array", "items": {"type": "string"}},
                 "direction_insights": {"type": "array", "items": {"type": "string"}},
@@ -135,6 +189,109 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
 ]
 
 
+def ensure_object_payload(payload: Dict[str, Any]) -> None:
+    if not isinstance(payload, dict):
+        raise ValueError("payload must be a JSON object")
+
+
+def validate_update_payload(payload: Dict[str, Any]) -> None:
+    ensure_object_payload(payload)
+    allowed = set(SCALAR_PLAN_FIELDS + LIST_PLAN_FIELDS)
+    unknown = sorted(set(payload) - allowed)
+    if unknown:
+        raise ValueError(f"unknown update_plan fields: {', '.join(unknown)}")
+
+    for field in SCALAR_PLAN_FIELDS:
+        if field in payload and not isinstance(payload[field], str):
+            raise ValueError(f"{field} must be a string")
+
+    for field in LIST_PLAN_FIELDS:
+        if field not in payload:
+            continue
+        value = payload[field]
+        if not isinstance(value, list):
+            raise ValueError(f"{field} must be an array")
+        if field == "risks":
+            for index, item in enumerate(value):
+                if isinstance(item, str) and item.strip():
+                    continue
+                if isinstance(item, dict) and all(isinstance(item.get(key), str) and item.get(key, "").strip() for key in ["risk", "signal", "mitigation"]):
+                    continue
+                raise ValueError(f"risks[{index}] must be a non-empty string or an object with risk/signal/mitigation")
+            continue
+        if not all(isinstance(item, str) for item in value):
+            raise ValueError(f"{field} must contain only strings")
+
+
+def validate_evidence_payload(payload: Dict[str, Any]) -> None:
+    ensure_object_payload(payload)
+    allowed = {"claim", "source", "confidence", "axis", "date", "reference"}
+    unknown = sorted(set(payload) - allowed)
+    if unknown:
+        raise ValueError(f"unknown add_evidence fields: {', '.join(unknown)}")
+    claim = payload.get("claim", "")
+    if not isinstance(claim, str) or not claim.strip():
+        raise ValueError("claim is required")
+    for key in ["source", "axis", "date", "reference"]:
+        if key in payload and not isinstance(payload[key], str):
+            raise ValueError(f"{key} must be a string")
+    if "confidence" in payload and (not isinstance(payload["confidence"], int) or isinstance(payload["confidence"], bool)):
+        raise ValueError("confidence must be an integer")
+
+
+def validate_hypothesis_payload(payload: Dict[str, Any]) -> None:
+    ensure_object_payload(payload)
+    allowed = {"hypothesis", "metric", "target", "window", "status", "outcome", "evidence", "confidence", "axis", "date"}
+    unknown = sorted(set(payload) - allowed)
+    if unknown:
+        raise ValueError(f"unknown add_hypothesis fields: {', '.join(unknown)}")
+    hypothesis = payload.get("hypothesis", "")
+    if not isinstance(hypothesis, str) or not hypothesis.strip():
+        raise ValueError("hypothesis is required")
+    for key in ["metric", "target", "window", "status", "outcome", "evidence", "axis", "date"]:
+        if key in payload and not isinstance(payload[key], str):
+            raise ValueError(f"{key} must be a string")
+    if "confidence" in payload and (not isinstance(payload["confidence"], int) or isinstance(payload["confidence"], bool)):
+        raise ValueError("confidence must be an integer")
+    status = str(payload.get("status", "open")).strip() or "open"
+    if status not in {"open", "validated", "invalidated", "pivoted"}:
+        raise ValueError("status must be one of: open, validated, invalidated, pivoted")
+
+
+def validate_replan_payload(payload: Dict[str, Any]) -> None:
+    ensure_object_payload(payload)
+    allowed = {
+        "evidence",
+        "evidence_source",
+        "evidence_confidence",
+        "evidence_axis",
+        "evidence_date",
+        "plan_task",
+        "execution_task",
+        "phase",
+        "reference",
+        "insight",
+        "direction_insight",
+        "market_insight",
+        "timing_insight",
+        "differentiation_insight",
+        "monetization_insight",
+        "constraint_insight",
+        "risk_signal_insight",
+        "evolution_insight",
+    }
+    unknown = sorted(set(payload) - allowed)
+    if unknown:
+        raise ValueError(f"unknown replan fields: {', '.join(unknown)}")
+    for key, value in payload.items():
+        if key == "evidence_confidence":
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise ValueError("evidence_confidence must be an integer")
+            continue
+        if not isinstance(value, str):
+            raise ValueError(f"{key} must be a string")
+
+
 def merge_plan_updates(plan: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
     for field in SCALAR_PLAN_FIELDS:
         if field in payload and isinstance(payload[field], str):
@@ -152,66 +309,93 @@ def list_tools() -> List[Dict[str, Any]]:
 def execute_tool(name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     if name == "get_plan":
         plan = load_plan()
-        return {"plan": plan, "summary": plan_summary(plan)}
+        return {"plan": plan, "summary": plan_summary(plan), "validation": validate_plan_shape(plan)}
 
     if name == "get_qa":
         return qa_report(load_plan())
 
+    if name == "validate_plan":
+        return validate_plan_shape(load_plan())
+
+    if name == "replan":
+        validate_replan_payload(payload)
+        result = mutate_plan_state(
+            lambda plan: apply_replan_payload(plan, payload),
+            include_autoreplan=True,
+        )
+        return {
+            "plan": result["plan"],
+            "summary": plan_summary(result["plan"]),
+            "validation": validate_plan_shape(result["plan"]),
+            "qa": result["qa"],
+            "auto_replan": result["auto_replan"],
+        }
+
     if name == "update_plan":
-        plan = load_plan()
-        plan = merge_plan_updates(plan, payload)
-        save_plan(plan)
-        return {"plan": plan, "summary": plan_summary(plan), "qa": qa_report(plan)}
+        validate_update_payload(payload)
+        result = mutate_plan_state(
+            lambda plan: merge_plan_updates(plan, payload),
+            include_autoreplan=True,
+        )
+        return {
+            "plan": result["plan"],
+            "summary": plan_summary(result["plan"]),
+            "validation": validate_plan_shape(result["plan"]),
+            "qa": result["qa"],
+            "auto_replan": result["auto_replan"],
+        }
 
     if name == "add_evidence":
+        validate_evidence_payload(payload)
         claim = str(payload.get("claim", "")).strip()
-        if not claim:
-            raise ValueError("claim is required")
-        plan = load_plan()
-        add_evidence(
-            plan,
-            claim,
-            str(payload.get("source", "agent")).strip() or "agent",
-            int(payload.get("confidence", 60)),
-            str(payload.get("axis", "")).strip(),
-            str(payload.get("date", "")).strip(),
+        plan = mutate_plan_state(
+            lambda plan: (
+                add_evidence(
+                    plan,
+                    claim,
+                    str(payload.get("source", "agent")).strip() or "agent",
+                    int(payload.get("confidence", 60)),
+                    str(payload.get("axis", "")).strip(),
+                    str(payload.get("date", "")).strip(),
+                ),
+                plan.setdefault("references", []).append(payload["reference"].strip())
+                if isinstance(payload.get("reference"), str) and payload["reference"].strip()
+                else None,
+            )
         )
-        if isinstance(payload.get("reference"), str) and payload["reference"].strip():
-            plan.setdefault("references", []).append(payload["reference"].strip())
-        save_plan(plan)
-        return {"plan": plan, "summary": plan_summary(plan), "qa": qa_report(plan)}
+        return {"plan": plan, "summary": plan_summary(plan), "validation": validate_plan_shape(plan), "qa": qa_report(plan)}
 
     if name == "add_hypothesis":
+        validate_hypothesis_payload(payload)
         hypothesis = str(payload.get("hypothesis", "")).strip()
-        if not hypothesis:
-            raise ValueError("hypothesis is required")
         status = str(payload.get("status", "open")).strip() or "open"
-        if status not in {"open", "validated", "invalidated", "pivoted"}:
-            raise ValueError("status must be one of: open, validated, invalidated, pivoted")
-        plan = load_plan()
-        plan.setdefault("hypothesis_log", []).append(
-            {
-                "ts": now_iso(),
-                "hypothesis": hypothesis,
-                "metric": str(payload.get("metric", "")).strip(),
-                "target": str(payload.get("target", "")).strip(),
-                "window": str(payload.get("window", "")).strip(),
-                "status": status,
-                "outcome": str(payload.get("outcome", "")).strip(),
-            }
-        )
         evidence = str(payload.get("evidence", "")).strip()
-        if evidence:
-            add_evidence(
-                plan,
-                evidence,
-                "hypothesis-test",
-                int(payload.get("confidence", 60)),
-                str(payload.get("axis", "")).strip(),
-                str(payload.get("date", "")).strip(),
+        plan = mutate_plan_state(
+            lambda plan: (
+                plan.setdefault("hypothesis_log", []).append(
+                    {
+                        "ts": now_iso(),
+                        "hypothesis": hypothesis,
+                        "metric": str(payload.get("metric", "")).strip(),
+                        "target": str(payload.get("target", "")).strip(),
+                        "window": str(payload.get("window", "")).strip(),
+                        "status": status,
+                        "outcome": str(payload.get("outcome", "")).strip(),
+                    }
+                ),
+                add_evidence(
+                    plan,
+                    evidence,
+                    "hypothesis-test",
+                    int(payload.get("confidence", 60)),
+                    str(payload.get("axis", "")).strip(),
+                    str(payload.get("date", "")).strip(),
+                )
+                if evidence
+                else None,
             )
-        save_plan(plan)
-        return {"plan": plan, "summary": plan_summary(plan), "qa": qa_report(plan)}
+        )
+        return {"plan": plan, "summary": plan_summary(plan), "validation": validate_plan_shape(plan), "qa": qa_report(plan)}
 
     raise ValueError(f"unknown tool: {name}")
 
@@ -246,8 +430,10 @@ def slash_to_tool(command: str) -> Tuple[str, Dict[str, Any]]:
     mapping = {
         "/deepplan": "update_plan",
         "/deepplan.plan": "update_plan",
+        "/deepplan.replan": "replan",
         "/deepplan.show": "get_plan",
         "/deepplan.qa": "get_qa",
+        "/deepplan.validate": "validate_plan",
         "/deepplan.evidence": "add_evidence",
         "/deepplan.hypothesis": "add_hypothesis",
     }
@@ -264,6 +450,10 @@ def natural_language_to_tool(text: str) -> Tuple[str, Dict[str, Any]]:
         return slash_to_tool(stripped)
     if any(phrase in lowered for phrase in ["qa", "quality check", "quality status"]):
         return "get_qa", {}
+    if any(phrase in lowered for phrase in ["validate plan", "plan validation", "check plan structure"]):
+        return "validate_plan", {}
+    if lowered.startswith("replan "):
+        return "replan", parse_assignment_tokens(shlex.split(stripped[len("replan ") :]))
     if any(phrase in lowered for phrase in ["show plan", "current plan", "plan summary", "what is the plan"]):
         return "get_plan", {}
     if lowered.startswith("add evidence "):
@@ -280,12 +470,18 @@ def cmd_tools(_: argparse.Namespace) -> None:
 
 
 def cmd_run(args: argparse.Namespace) -> None:
-    tool_name, payload = natural_language_to_tool(args.input)
+    try:
+        tool_name, payload = natural_language_to_tool(args.input)
+    except ValueError as exc:
+        raise SystemExit(str(exc))
     envelope = {"tool": tool_name, "input": payload}
     if args.dry_run:
         print(json.dumps(envelope, indent=2, ensure_ascii=False))
         return
-    result = execute_tool(tool_name, payload)
+    try:
+        result = execute_tool(tool_name, payload)
+    except ValueError as exc:
+        raise SystemExit(str(exc))
     print(json.dumps({"tool": tool_name, "input": payload, "result": result}, indent=2, ensure_ascii=False))
 
 

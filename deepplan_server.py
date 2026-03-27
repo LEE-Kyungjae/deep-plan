@@ -23,6 +23,9 @@ class DeepPlanHandler(BaseHTTPRequestHandler):
         if path == "/qa":
             self._write_json(HTTPStatus.OK, execute_tool("get_qa", {}))
             return
+        if path == "/validate":
+            self._write_json(HTTPStatus.OK, execute_tool("validate_plan", {}))
+            return
         if path == "/tools":
             self._write_json(HTTPStatus.OK, {"tools": list_tools()})
             return
@@ -35,12 +38,22 @@ class DeepPlanHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
 
         if path == "/plan":
-            self._write_json(HTTPStatus.OK, execute_tool("update_plan", payload))
+            try:
+                self._write_json(HTTPStatus.OK, execute_tool("update_plan", payload))
+            except ValueError as exc:
+                self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
             return
 
         if path == "/evidence":
             try:
                 self._write_json(HTTPStatus.OK, execute_tool("add_evidence", payload))
+            except ValueError as exc:
+                self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+            return
+
+        if path == "/replan":
+            try:
+                self._write_json(HTTPStatus.OK, execute_tool("replan", payload))
             except ValueError as exc:
                 self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
             return

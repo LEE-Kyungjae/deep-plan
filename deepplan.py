@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 import argparse
+import hashlib
 import json
+import os
 import re
+import tempfile
+import threading
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 ROOT = Path(__file__).resolve().parent
@@ -14,6 +18,7 @@ PLAN_PATH = STATE_DIR / "plan.json"
 DECISIONS_PATH = STATE_DIR / "decisions.jsonl"
 RISKS_PATH = STATE_DIR / "risks.jsonl"
 EVENTS_PATH = STATE_DIR / "events.jsonl"
+STATE_LOCK = threading.RLock()
 
 
 def now_iso() -> str:
@@ -110,22 +115,268 @@ def migrate_plan(plan: Dict) -> Dict:
     return plan
 
 
-def load_plan() -> Dict:
+def _load_plan_unlocked() -> Dict:
     ensure_state()
-    plan = json.loads(PLAN_PATH.read_text(encoding="utf-8"))
-    plan = migrate_plan(plan)
-    save_plan(plan)
+    original_plan = json.loads(PLAN_PATH.read_text(encoding="utf-8"))
+    plan = migrate_plan(json.loads(json.dumps(original_plan)))
     return plan
 
 
-def save_plan(plan: Dict) -> None:
+def load_plan() -> Dict:
+    with STATE_LOCK:
+        return _load_plan_unlocked()
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as tmp:
+            tmp.write(text)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+            temp_path = Path(tmp.name)
+        os.replace(temp_path, path)
+    finally:
+        if temp_path and temp_path.exists():
+            temp_path.unlink(missing_ok=True)
+
+
+def _save_plan_unlocked(plan: Dict) -> None:
     plan["updated_at"] = now_iso()
-    PLAN_PATH.write_text(json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
+    atomic_write_text(PLAN_PATH, json.dumps(plan, indent=2, ensure_ascii=False))
+
+
+def save_plan(plan: Dict) -> None:
+    with STATE_LOCK:
+        _save_plan_unlocked(plan)
+
+
+def validate_risk_item(item, index: int) -> List[str]:
+    errors: List[str] = []
+    prefix = f"risks[{index}]"
+    if isinstance(item, str):
+        if not item.strip():
+            errors.append(f"{prefix} must not be empty")
+        return errors
+    if not isinstance(item, dict):
+        return [f"{prefix} must be a string or object"]
+    for key in ["risk", "signal", "mitigation"]:
+        if not isinstance(item.get(key), str) or not item.get(key, "").strip():
+            errors.append(f"{prefix}.{key} must be a non-empty string")
+    return errors
+
+
+def validate_evidence_item(item, index: int) -> List[str]:
+    errors: List[str] = []
+    prefix = f"evidence[{index}]"
+    if isinstance(item, str):
+        if not item.strip():
+            errors.append(f"{prefix} must not be empty")
+        return errors
+    if not isinstance(item, dict):
+        return [f"{prefix} must be a string or object"]
+    for key in ["claim", "source", "date"]:
+        if not isinstance(item.get(key), str) or not item.get(key, "").strip():
+            errors.append(f"{prefix}.{key} must be a non-empty string")
+    confidence = item.get("confidence")
+    if not isinstance(confidence, int) or isinstance(confidence, bool):
+        errors.append(f"{prefix}.confidence must be an integer")
+    elif confidence < 0 or confidence > 100:
+        errors.append(f"{prefix}.confidence must be between 0 and 100")
+    axis = item.get("axis", "")
+    if axis != "" and not isinstance(axis, str):
+        errors.append(f"{prefix}.axis must be a string")
+    return errors
+
+
+def validate_hypothesis_item(item, index: int) -> List[str]:
+    errors: List[str] = []
+    prefix = f"hypothesis_log[{index}]"
+    if not isinstance(item, dict):
+        return [f"{prefix} must be an object"]
+    for key in ["ts", "hypothesis", "status"]:
+        if not isinstance(item.get(key), str) or not item.get(key, "").strip():
+            errors.append(f"{prefix}.{key} must be a non-empty string")
+    for key in ["metric", "target", "window", "outcome"]:
+        value = item.get(key, "")
+        if value != "" and not isinstance(value, str):
+            errors.append(f"{prefix}.{key} must be a string")
+    status = item.get("status", "")
+    if isinstance(status, str) and status and status not in {"open", "validated", "invalidated", "pivoted"}:
+        errors.append(f"{prefix}.status must be one of: open, validated, invalidated, pivoted")
+    return errors
+
+
+def validate_plan_shape(plan: Dict) -> Dict:
+    expected = default_plan()
+    errors: List[str] = []
+
+    if not isinstance(plan, dict):
+        return {"valid": False, "errors": ["plan must be an object"]}
+
+    for key, template in expected.items():
+        if key not in plan:
+            errors.append(f"missing required field: {key}")
+            continue
+        value = plan[key]
+        if isinstance(template, str):
+            if not isinstance(value, str):
+                errors.append(f"{key} must be a string")
+        elif isinstance(template, list):
+            if not isinstance(value, list):
+                errors.append(f"{key} must be an array")
+
+    if isinstance(plan.get("risks"), list):
+        for index, item in enumerate(plan["risks"]):
+            errors.extend(validate_risk_item(item, index))
+    if isinstance(plan.get("evidence"), list):
+        for index, item in enumerate(plan["evidence"]):
+            errors.extend(validate_evidence_item(item, index))
+    if isinstance(plan.get("hypothesis_log"), list):
+        for index, item in enumerate(plan["hypothesis_log"]):
+            errors.extend(validate_hypothesis_item(item, index))
+
+    return {"valid": len(errors) == 0, "errors": errors}
+
+
+def ensure_non_empty_text(value: str, field_name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be a non-empty string")
+    return value.strip()
+
+
+def ensure_confidence(value: int, field_name: str = "confidence") -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError(f"{field_name} must be an integer")
+    if value < 0 or value > 100:
+        raise ValueError(f"{field_name} must be between 0 and 100")
+    return value
+
+
+def ensure_valid_plan(plan: Dict) -> Dict:
+    report = validate_plan_shape(plan)
+    if not report["valid"]:
+        raise ValueError("plan validation failed: " + "; ".join(report["errors"]))
+    return plan
+
+
+def save_validated_plan(plan: Dict) -> None:
+    ensure_valid_plan(plan)
+    save_plan(plan)
+
+
+def _save_validated_plan_unlocked(plan: Dict) -> None:
+    ensure_valid_plan(plan)
+    _save_plan_unlocked(plan)
+
+
+def plan_fingerprint(plan: Dict) -> str:
+    material = dict(plan)
+    material.pop("updated_at", None)
+    encoded = json.dumps(material, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def apply_replan_payload(plan: Dict, payload: Dict) -> Dict:
+    evidence_text = str(payload.get("evidence", "")).strip()
+    if evidence_text:
+        add_evidence(
+            plan,
+            ensure_non_empty_text(evidence_text, "evidence"),
+            str(payload.get("evidence_source", "replan")).strip() or "replan",
+            ensure_confidence(int(payload.get("evidence_confidence", 60)), "evidence_confidence"),
+            str(payload.get("evidence_axis", "")).strip(),
+            str(payload.get("evidence_date", "")).strip(),
+        )
+
+    for field, key in [
+        ("plan_task", "plan_tasks"),
+        ("execution_task", "execution_tasks"),
+        ("phase", "phase_plan"),
+        ("reference", "references"),
+        ("insight", "insights"),
+        ("direction_insight", "direction_insights"),
+        ("market_insight", "market_insights"),
+        ("timing_insight", "timing_insights"),
+        ("differentiation_insight", "differentiation_insights"),
+        ("monetization_insight", "monetization_insights"),
+        ("constraint_insight", "constraint_insights"),
+        ("risk_signal_insight", "risk_signal_insights"),
+        ("evolution_insight", "evolution_insights"),
+    ]:
+        value = str(payload.get(field, "")).strip()
+        if value:
+            plan.setdefault(key, []).append(value)
+
+    return plan
+
+
+def _append_jsonl_unlocked(path: Path, payload: Dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
 
 
 def append_jsonl(path: Path, payload: Dict) -> None:
-    with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    with STATE_LOCK:
+        _append_jsonl_unlocked(path, payload)
+
+
+def mutate_plan_state(mutate_fn, event_payloads: Optional[List[Dict]] = None, include_autoreplan: bool = False):
+    with STATE_LOCK:
+        plan = _load_plan_unlocked()
+        mutate_fn(plan)
+        _save_validated_plan_unlocked(plan)
+        for payload in event_payloads or []:
+            _append_jsonl_unlocked(EVENTS_PATH, payload)
+        if include_autoreplan:
+            return qa_autoreplan_result(plan)
+        return plan
+
+
+def read_jsonl(path: Path) -> List[Dict]:
+    if not path.exists():
+        return []
+    items: List[Dict] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            items.append(payload)
+    return items
+
+
+def last_auto_replan_event(plan: Optional[Dict] = None) -> Optional[Dict]:
+    current_updated_at = str(plan.get("updated_at", "")).strip() if isinstance(plan, dict) else ""
+    current_fingerprint = plan_fingerprint(plan) if isinstance(plan, dict) else ""
+    for event in reversed(read_jsonl(EVENTS_PATH)):
+        if event.get("type") != "auto_replan":
+            continue
+        final_fingerprint = str(event.get("final_fingerprint", "")).strip()
+        initial_fingerprint = str(event.get("initial_fingerprint", "")).strip()
+        if current_fingerprint:
+            if final_fingerprint and final_fingerprint == current_fingerprint:
+                return event
+            if not final_fingerprint and initial_fingerprint and initial_fingerprint == current_fingerprint:
+                return event
+            continue
+        if not current_updated_at:
+            return event
+        final_updated_at = str(event.get("final_updated_at", "")).strip()
+        initial_updated_at = str(event.get("initial_updated_at", "")).strip()
+        if final_updated_at and final_updated_at == current_updated_at:
+            return event
+        if not final_updated_at and initial_updated_at and initial_updated_at == current_updated_at:
+            return event
+    return None
 
 
 def non_empty(v) -> bool:
@@ -501,12 +752,14 @@ def qa_report(plan: Dict) -> Dict:
     total = qa_total_weight(checks)
     threshold = qa_pass_threshold(checks)
     result = "CRITICAL_FAILURE" if critical_failure else "PASS" if score >= threshold else "NEEDS_REPLAN"
+    validation = validate_plan_shape(plan)
     return {
         "score": score,
         "total": total,
         "threshold": threshold,
         "critical_failure": critical_failure,
         "result": result,
+        "validation": validation,
         "checks": [
             {
                 "name": c.name,
@@ -563,6 +816,7 @@ def plan_summary(plan: Dict) -> Dict:
         ]
         if non_empty(plan.get(key))
     )
+    recent_auto_replan = last_auto_replan_event(plan)
     return {
         "goal": plan.get("goal"),
         "success_metric": plan.get("success_metric"),
@@ -582,76 +836,248 @@ def plan_summary(plan: Dict) -> Dict:
         "evidence_count": len(evidence_objects(plan)),
         "hypothesis_count": len(plan.get("hypothesis_log", [])),
         "risk_count": len(plan.get("risks", [])),
+        "recent_auto_replan": {
+            "blocked": recent_auto_replan.get("blocked", []),
+            "actions": recent_auto_replan.get("actions", []),
+            "initial_result": recent_auto_replan.get("initial_result", ""),
+            "final_result": recent_auto_replan.get("final_result", recent_auto_replan.get("initial_result", "")),
+            "score_delta": recent_auto_replan.get("score_delta", 0),
+        }
+        if recent_auto_replan
+        else None,
     }
 
 
-def auto_replan_stub(plan: Dict, checks: List[CheckResult]) -> Dict:
+def extend_unique_strings(values: List[str], candidates: List[str]) -> List[str]:
+    existing = {value.strip() for value in values if isinstance(value, str)}
+    for candidate in candidates:
+        normalized = candidate.strip()
+        if normalized and normalized not in existing:
+            values.append(normalized)
+            existing.add(normalized)
+    return values
+
+
+def add_autoreplan_action(actions: List[str], message: str) -> None:
+    if message not in actions:
+        actions.append(message)
+
+
+def ensure_axis_insight_depth(plan: Dict, axis_key: str, suggestions: List[str]) -> bool:
+    values = plan.setdefault(axis_key, [])
+    before = len(values)
+    if before >= 3:
+        return False
+    extend_unique_strings(values, suggestions[: max(0, 3 - before)])
+    return len(values) > before
+
+
+def derive_planning_horizon(deadline_text: str) -> str:
+    if not deadline_text:
+        return "12 weeks"
+    try:
+        deadline_date = datetime.strptime(deadline_text, "%Y-%m-%d").date()
+    except ValueError:
+        return "12 weeks"
+    days = max(1, (deadline_date - date.today()).days)
+    weeks = max(1, round(days / 7))
+    if weeks >= 8:
+        return f"{weeks} weeks"
+    return f"{days} days"
+
+
+def derive_review_cadence(horizon_text: str) -> str:
+    if "month" in horizon_text or "week" in horizon_text:
+        return "weekly"
+    return "twice-weekly"
+
+
+def auto_replan(plan: Dict, checks: List[CheckResult]) -> Tuple[Dict, List[str], List[str]]:
+    actions: List[str] = []
     failed = [c.name for c in checks if not c.passed]
+    blocked = [name for name in failed if name in {"goal_clarity", "measurability"}]
+    if blocked:
+        return plan, actions, blocked
+
     if "constraints" in failed and not plan.get("constraints"):
         plan["constraints"] = ["Define practical limits for time, budget, and staffing."]
+        add_autoreplan_action(actions, "Added baseline constraints.")
     if "assumptions" in failed and not plan.get("assumptions"):
         plan["assumptions"] = ["Key assumptions need explicit validation."]
-    if "options_comparison" in failed and len(plan.get("options", [])) < 2:
-        plan["options"] = [
+        add_autoreplan_action(actions, "Added baseline assumptions.")
+    if "options_comparison" in failed:
+        plan["options"] = extend_unique_strings(plan.get("options", []), [
             "Conservative option: narrow scope and faster delivery.",
             "Balanced option: medium scope with staged rollout.",
             "Aggressive option: broad scope with higher risk.",
-        ]
-        if not plan.get("selected_option"):
-            plan["selected_option"] = "Balanced option: medium scope with staged rollout."
+        ])
+        if len(plan["options"]) >= 2 and not plan.get("selected_option"):
+            plan["selected_option"] = plan["options"][0]
+        add_autoreplan_action(actions, "Completed option comparison and selected a provisional path.")
     if "references_coverage" in failed and len(plan.get("references", [])) < 3:
-        plan["references"] = [
+        before = len(plan.get("references", []))
+        plan["references"] = extend_unique_strings(plan.get("references", []), [
             "Spec-driven planning examples",
             "Agent workflow docs",
             "Postmortem of failed planning cases",
-        ]
+        ])
+        if len(plan["references"]) > before:
+            add_autoreplan_action(actions, "Added missing reference coverage.")
     if "insight_axes_coverage" in failed and len(plan.get("insights", [])) < 3:
-        plan["insights"] = [
+        before = len(plan.get("insights", []))
+        plan["insights"] = extend_unique_strings(plan.get("insights", []), [
             "Treat planning as first-class work, not overhead.",
             "Require evidence links for every critical decision.",
             "Replan from execution signals, not intuition.",
-        ]
+        ])
+        if len(plan["insights"]) > before:
+            add_autoreplan_action(actions, "Added generic planning insights.")
     if "insight_axes_coverage" in failed:
         if not plan.get("direction_insights"):
             plan["direction_insights"] = ["State why this initiative matters now and what outcome it must create."]
+            add_autoreplan_action(actions, "Filled missing direction insight.")
         if not plan.get("market_insights"):
             plan["market_insights"] = ["Identify the highest-pain user segment and current alternatives."]
+            add_autoreplan_action(actions, "Filled missing market insight.")
         if not plan.get("timing_insights"):
             plan["timing_insights"] = ["Define why this timing is favorable now and what delay would cost."]
+            add_autoreplan_action(actions, "Filled missing timing insight.")
         if not plan.get("differentiation_insights"):
             plan["differentiation_insights"] = ["Describe one clear strategic difference versus existing options."]
+            add_autoreplan_action(actions, "Filled missing differentiation insight.")
         if not plan.get("monetization_insights"):
             plan["monetization_insights"] = ["Link user value to a concrete monetization path."]
+            add_autoreplan_action(actions, "Filled missing monetization insight.")
         if not plan.get("constraint_insights"):
             plan["constraint_insights"] = ["List execution constraints and the intended workaround strategy."]
+            add_autoreplan_action(actions, "Filled missing constraint insight.")
         if not plan.get("risk_signal_insights"):
             plan["risk_signal_insights"] = ["Define one early failure signal and the immediate response."]
+            add_autoreplan_action(actions, "Filled missing risk-signal insight.")
         if not plan.get("evolution_insights"):
             plan["evolution_insights"] = ["Define how the plan will be revised on a weekly or monthly cadence."]
+            add_autoreplan_action(actions, "Filled missing evolution insight.")
+    if "insight_quality_weighted" in failed:
+        depth_templates = {
+            "direction_insights": [
+                "Clarify the concrete outcome this initiative must create in the next review cycle.",
+                "Name the decision this plan should make easier or faster.",
+                "State what will be deprioritized to protect direction quality.",
+            ],
+            "market_insights": [
+                "Name the narrowest segment with repeated pain and current workaround behavior.",
+                "Describe the frequency and severity of the target pain.",
+                "Identify what makes this segment care now rather than later.",
+            ],
+            "timing_insights": [
+                "Describe the external change that makes this timing favorable.",
+                "State the cost of waiting one review cycle longer.",
+                "Note which near-term window could close if delayed.",
+            ],
+            "differentiation_insights": [
+                "State the first-session difference users should notice versus alternatives.",
+                "Describe the capability incumbents do not serve well.",
+                "Clarify which tradeoff is acceptable to preserve differentiation.",
+            ],
+            "monetization_insights": [
+                "Map the main user value to a willingness-to-pay signal.",
+                "Describe the earliest monetizable outcome this plan can produce.",
+                "State what pricing proxy would validate this direction.",
+            ],
+            "constraint_insights": [
+                "List the hardest execution limit for the next horizon.",
+                "Describe the mitigation if that limit tightens unexpectedly.",
+                "State what scope cap prevents resource dilution.",
+            ],
+            "risk_signal_insights": [
+                "Name the earliest disconfirming signal for this direction.",
+                "Define the trigger that should force a replan decision.",
+                "State which metric would indicate false momentum.",
+            ],
+            "evolution_insights": [
+                "Specify what evidence must be reviewed each cycle.",
+                "Describe what kind of signal changes the plan versus the execution layer.",
+                "State which learning should compound into the next phase plan.",
+            ],
+        }
+        depth_added = False
+        for axis_key, suggestions in depth_templates.items():
+            if ensure_axis_insight_depth(plan, axis_key, suggestions):
+                depth_added = True
+        if depth_added:
+            add_autoreplan_action(actions, "Expanded insight depth across all planning axes.")
     if "planning_horizon" in failed:
         if not plan.get("planning_horizon"):
-            plan["planning_horizon"] = "12 weeks"
+            plan["planning_horizon"] = derive_planning_horizon(plan.get("deadline", ""))
+            add_autoreplan_action(actions, "Set planning horizon from deadline or default.")
         if not plan.get("review_cadence"):
-            plan["review_cadence"] = "weekly"
+            plan["review_cadence"] = derive_review_cadence(plan["planning_horizon"])
+            add_autoreplan_action(actions, "Set review cadence from planning horizon.")
     if "phase_plan" in failed and not plan.get("phase_plan"):
         plan["phase_plan"] = [
             "Phase 1 (Weeks 1-2): Problem framing and reference collection.",
             "Phase 2 (Weeks 3-6): Option testing and strategic choice.",
             "Phase 3 (Weeks 7-12): Signal tracking and plan refinement.",
         ]
-    if len(plan.get("plan_tasks", [])) == 0:
-        plan["plan_tasks"] = [
+        add_autoreplan_action(actions, "Added default phase plan.")
+    if len(plan.get("plan_tasks", [])) < 2:
+        before = len(plan.get("plan_tasks", []))
+        plan["plan_tasks"] = extend_unique_strings(plan.get("plan_tasks", []), [
             "Collect references and extract constraints.",
             "Generate and compare three strategy options.",
             "Define milestone review checkpoints.",
             "Prepare next-cycle replan criteria.",
-        ]
+        ])
+        if len(plan["plan_tasks"]) > before:
+            add_autoreplan_action(actions, "Expanded plan tasks.")
+    if len(plan.get("execution_tasks", [])) < 2:
+        before = len(plan.get("execution_tasks", []))
+        plan["execution_tasks"] = extend_unique_strings(plan.get("execution_tasks", []), [
+            "Run the next small validation loop with a real user or artifact.",
+            "Capture outcome signals against the success metric.",
+        ])
+        if len(plan["execution_tasks"]) > before:
+            add_autoreplan_action(actions, "Expanded execution tasks.")
     if "verification_loop" in failed and not plan.get("experiments"):
         plan["experiments"] = ["Run one pilot iteration and compare against success metric."]
-    if "evidence_quality" in failed and len(evidence_objects(plan)) < 3:
-        add_evidence(plan, "Primary user pain appears frequently.", "interview-notes", 65, "market_insights")
-        add_evidence(plan, "Current alternatives fail to solve core workflow.", "competitor-review", 70, "differentiation_insights")
-        add_evidence(plan, "Users show willingness to pay for time savings.", "pricing-survey", 60, "monetization_insights")
+        add_autoreplan_action(actions, "Added validation experiment.")
+    if "evidence_quality" in failed:
+        existing_evidence = evidence_objects(plan)
+        existing_claims = {
+            item.get("claim", "").strip()
+            for item in existing_evidence
+            if isinstance(item, dict)
+        }
+        existing_sources = {
+            item.get("source", "").strip()
+            for item in existing_evidence
+            if isinstance(item, dict) and item.get("source", "").strip()
+        }
+        high_conf = sum(1 for item in existing_evidence if isinstance(item, dict) and int(item.get("confidence", 0)) >= 60)
+        seeded_evidence = [
+            ("Primary user pain appears frequently.", "interview-notes", 65, "market_insights"),
+            ("Current alternatives fail to solve core workflow.", "competitor-review", 70, "differentiation_insights"),
+            ("Users show willingness to pay for time savings.", "pricing-survey", 60, "monetization_insights"),
+        ]
+        added_evidence = 0
+        for claim, source, confidence, axis in seeded_evidence:
+            if claim in existing_claims:
+                continue
+            needs_count = len(evidence_objects(plan)) < 3
+            needs_confidence = high_conf < 2 and confidence >= 60
+            needs_sources = len(existing_sources) < 2 and source not in existing_sources
+            if not any([needs_count, needs_confidence, needs_sources]):
+                continue
+            add_evidence(plan, claim, source, confidence, axis)
+            existing_claims.add(claim)
+            existing_sources.add(source)
+            if confidence >= 60:
+                high_conf += 1
+            added_evidence += 1
+            if len(evidence_objects(plan)) >= 3 and high_conf >= 2 and len(existing_sources) >= 2:
+                break
+        if added_evidence:
+            add_autoreplan_action(actions, "Added evidence to restore minimum quality coverage.")
     if "hypothesis_loop" in failed and not plan.get("hypothesis_log"):
         plan["hypothesis_log"] = [
             {
@@ -664,6 +1090,7 @@ def auto_replan_stub(plan: Dict, checks: List[CheckResult]) -> Dict:
                 "outcome": "",
             }
         ]
+        add_autoreplan_action(actions, "Added baseline hypothesis.")
     if "risk_coverage" in failed and not plan.get("risks"):
         plan["risks"] = [
             {
@@ -672,11 +1099,71 @@ def auto_replan_stub(plan: Dict, checks: List[CheckResult]) -> Dict:
                 "mitigation": "Freeze sprint scope and defer extras",
             }
         ]
+        add_autoreplan_action(actions, "Added baseline risk record.")
     if "dependencies" in failed and not plan.get("dependencies"):
         plan["dependencies"] = ["Agent runtime support (Codex/Claude Code)"]
+        add_autoreplan_action(actions, "Added baseline dependency.")
     if "definition_of_done" in failed and not plan.get("definition_of_done"):
         plan["definition_of_done"] = ["All core commands work and QA >= 70."]
-    return plan
+        add_autoreplan_action(actions, "Added definition of done.")
+
+    return plan, actions, blocked
+
+
+def qa_autoreplan_result(plan: Dict) -> Dict:
+    score, checks, critical_failure = run_qa(plan)
+    initial = qa_report(plan)
+    threshold = qa_pass_threshold(checks)
+    initial_fingerprint = plan_fingerprint(plan)
+    outcome = {
+        "plan": plan,
+        "initial_qa": initial,
+        "qa": initial,
+        "auto_replan": {
+            "triggered": False,
+            "blocked": [],
+            "actions": [],
+        },
+    }
+    if score >= threshold and not critical_failure:
+        return outcome
+
+    updated_plan, actions, blocked = auto_replan(plan, checks)
+    outcome["auto_replan"] = {
+        "triggered": True,
+        "blocked": blocked,
+        "actions": actions,
+    }
+    event_payload = {
+        "ts": now_iso(),
+        "type": "auto_replan",
+        "source": "qa_autoreplan_result",
+        "blocked": blocked,
+        "actions": actions,
+        "initial_result": initial["result"],
+        "initial_score": initial["score"],
+        "threshold": initial["threshold"],
+        "initial_updated_at": plan.get("updated_at", ""),
+        "initial_fingerprint": initial_fingerprint,
+    }
+    if blocked:
+        append_jsonl(EVENTS_PATH, event_payload)
+        return outcome
+
+    save_validated_plan(updated_plan)
+    outcome["plan"] = updated_plan
+    outcome["qa"] = qa_report(updated_plan)
+    event_payload.update(
+        {
+            "final_result": outcome["qa"]["result"],
+            "final_score": outcome["qa"]["score"],
+            "score_delta": outcome["qa"]["score"] - initial["score"],
+            "final_updated_at": outcome["plan"].get("updated_at", ""),
+            "final_fingerprint": plan_fingerprint(outcome["plan"]),
+        }
+    )
+    append_jsonl(EVENTS_PATH, event_payload)
+    return outcome
 
 
 def cmd_init(_: argparse.Namespace) -> None:
@@ -685,119 +1172,112 @@ def cmd_init(_: argparse.Namespace) -> None:
 
 
 def cmd_plan(args: argparse.Namespace) -> None:
-    plan = load_plan()
-    plan["goal"] = args.goal or plan.get("goal", "")
-    plan["success_metric"] = args.success_metric or plan.get("success_metric", "")
-    plan["deadline"] = args.deadline or plan.get("deadline", "")
-    plan["planning_horizon"] = args.planning_horizon or plan.get("planning_horizon", "")
-    plan["review_cadence"] = args.review_cadence or plan.get("review_cadence", "")
+    def apply_updates(plan: Dict) -> None:
+        plan["goal"] = args.goal or plan.get("goal", "")
+        plan["success_metric"] = args.success_metric or plan.get("success_metric", "")
+        plan["deadline"] = args.deadline or plan.get("deadline", "")
+        plan["planning_horizon"] = args.planning_horizon or plan.get("planning_horizon", "")
+        plan["review_cadence"] = args.review_cadence or plan.get("review_cadence", "")
 
-    if args.constraints:
-        plan["constraints"] = parse_csv(args.constraints)
-    if args.assumptions:
-        plan["assumptions"] = parse_csv(args.assumptions)
-    if args.options:
-        plan["options"] = parse_csv(args.options)
-    if args.selected_option:
-        plan["selected_option"] = args.selected_option.strip()
-    if args.plan_tasks:
-        plan["plan_tasks"] = parse_csv(args.plan_tasks)
-    if args.execution_tasks:
-        plan["execution_tasks"] = parse_csv(args.execution_tasks)
-    if args.phase_plan:
-        plan["phase_plan"] = parse_csv(args.phase_plan)
-    if args.references:
-        plan["references"] = parse_csv(args.references)
-    if args.insights:
-        plan["insights"] = parse_csv(args.insights)
-    if args.direction_insights:
-        plan["direction_insights"] = parse_csv(args.direction_insights)
-    if args.market_insights:
-        plan["market_insights"] = parse_csv(args.market_insights)
-    if args.timing_insights:
-        plan["timing_insights"] = parse_csv(args.timing_insights)
-    if args.differentiation_insights:
-        plan["differentiation_insights"] = parse_csv(args.differentiation_insights)
-    if args.monetization_insights:
-        plan["monetization_insights"] = parse_csv(args.monetization_insights)
-    if args.constraint_insights:
-        plan["constraint_insights"] = parse_csv(args.constraint_insights)
-    if args.risk_signal_insights:
-        plan["risk_signal_insights"] = parse_csv(args.risk_signal_insights)
-    if args.evolution_insights:
-        plan["evolution_insights"] = parse_csv(args.evolution_insights)
-    if args.dependencies:
-        plan["dependencies"] = parse_csv(args.dependencies)
-    if args.experiments:
-        plan["experiments"] = parse_csv(args.experiments)
-    if args.definition_of_done:
-        plan["definition_of_done"] = parse_csv(args.definition_of_done)
+        if args.constraints:
+            plan["constraints"] = parse_csv(args.constraints)
+        if args.assumptions:
+            plan["assumptions"] = parse_csv(args.assumptions)
+        if args.options:
+            plan["options"] = parse_csv(args.options)
+        if args.selected_option:
+            plan["selected_option"] = args.selected_option.strip()
+        if args.plan_tasks:
+            plan["plan_tasks"] = parse_csv(args.plan_tasks)
+        if args.execution_tasks:
+            plan["execution_tasks"] = parse_csv(args.execution_tasks)
+        if args.phase_plan:
+            plan["phase_plan"] = parse_csv(args.phase_plan)
+        if args.references:
+            plan["references"] = parse_csv(args.references)
+        if args.insights:
+            plan["insights"] = parse_csv(args.insights)
+        if args.direction_insights:
+            plan["direction_insights"] = parse_csv(args.direction_insights)
+        if args.market_insights:
+            plan["market_insights"] = parse_csv(args.market_insights)
+        if args.timing_insights:
+            plan["timing_insights"] = parse_csv(args.timing_insights)
+        if args.differentiation_insights:
+            plan["differentiation_insights"] = parse_csv(args.differentiation_insights)
+        if args.monetization_insights:
+            plan["monetization_insights"] = parse_csv(args.monetization_insights)
+        if args.constraint_insights:
+            plan["constraint_insights"] = parse_csv(args.constraint_insights)
+        if args.risk_signal_insights:
+            plan["risk_signal_insights"] = parse_csv(args.risk_signal_insights)
+        if args.evolution_insights:
+            plan["evolution_insights"] = parse_csv(args.evolution_insights)
+        if args.dependencies:
+            plan["dependencies"] = parse_csv(args.dependencies)
+        if args.experiments:
+            plan["experiments"] = parse_csv(args.experiments)
+        if args.definition_of_done:
+            plan["definition_of_done"] = parse_csv(args.definition_of_done)
 
-    save_plan(plan)
-    append_jsonl(EVENTS_PATH, {"ts": now_iso(), "type": "plan_updated", "source": "cmd_plan", "goal": plan["goal"]})
+    result = mutate_plan_state(
+        apply_updates,
+        event_payloads=[{"ts": now_iso(), "type": "plan_updated", "source": "cmd_plan", "goal": args.goal or ""}],
+        include_autoreplan=True,
+    )
+    report = result["initial_qa"]
+    print_qa(
+        report["score"],
+        [CheckResult(**check) for check in report["checks"]],
+        report["critical_failure"],
+    )
 
-    score, checks, critical_failure = run_qa(plan)
-    print_qa(score, checks, critical_failure)
-
-    if not critical_failure and score < qa_pass_threshold(checks):
+    if result["auto_replan"]["triggered"]:
         print("Auto replan triggered.")
-        plan = auto_replan_stub(plan, checks)
-        save_plan(plan)
-        score2, checks2, critical_failure2 = run_qa(plan)
+        if result["auto_replan"]["blocked"]:
+            print(f"Auto replan blocked by manual fields: {', '.join(result['auto_replan']['blocked'])}")
+            return
+        if result["auto_replan"]["actions"]:
+            print("Auto replan actions:")
+            for action in result["auto_replan"]["actions"]:
+                print(f"- {action}")
         print("Post-replan QA:")
-        print_qa(score2, checks2, critical_failure2)
+        post = result["qa"]
+        print_qa(
+            post["score"],
+            [CheckResult(**check) for check in post["checks"]],
+            post["critical_failure"],
+        )
 
 
 def cmd_replan(args: argparse.Namespace) -> None:
-    plan = load_plan()
-    if args.evidence:
-        add_evidence(
-            plan,
-            args.evidence.strip(),
-            args.evidence_source or "replan",
-            args.evidence_confidence,
-            args.evidence_axis or "",
-            args.evidence_date or "",
-        )
-    if args.plan_task:
-        plan.setdefault("plan_tasks", []).append(args.plan_task.strip())
-    if args.execution_task:
-        plan.setdefault("execution_tasks", []).append(args.execution_task.strip())
-    if args.phase:
-        plan.setdefault("phase_plan", []).append(args.phase.strip())
-    if args.reference:
-        plan.setdefault("references", []).append(args.reference.strip())
-    if args.insight:
-        plan.setdefault("insights", []).append(args.insight.strip())
-    if args.direction_insight:
-        plan.setdefault("direction_insights", []).append(args.direction_insight.strip())
-    if args.market_insight:
-        plan.setdefault("market_insights", []).append(args.market_insight.strip())
-    if args.timing_insight:
-        plan.setdefault("timing_insights", []).append(args.timing_insight.strip())
-    if args.differentiation_insight:
-        plan.setdefault("differentiation_insights", []).append(args.differentiation_insight.strip())
-    if args.monetization_insight:
-        plan.setdefault("monetization_insights", []).append(args.monetization_insight.strip())
-    if args.constraint_insight:
-        plan.setdefault("constraint_insights", []).append(args.constraint_insight.strip())
-    if args.risk_signal_insight:
-        plan.setdefault("risk_signal_insights", []).append(args.risk_signal_insight.strip())
-    if args.evolution_insight:
-        plan.setdefault("evolution_insights", []).append(args.evolution_insight.strip())
-
-    save_plan(plan)
-    append_jsonl(EVENTS_PATH, {"ts": now_iso(), "type": "replan", "source": "cmd_replan", "evidence": args.evidence or ""})
-
-    score, checks, critical_failure = run_qa(plan)
-    print_qa(score, checks, critical_failure)
-    if not critical_failure and score < qa_pass_threshold(checks):
+    result = mutate_plan_state(
+        lambda plan: apply_replan_payload(plan, vars(args)),
+        event_payloads=[{"ts": now_iso(), "type": "replan", "source": "cmd_replan", "evidence": args.evidence or ""}],
+        include_autoreplan=True,
+    )
+    report = result["initial_qa"]
+    print_qa(
+        report["score"],
+        [CheckResult(**check) for check in report["checks"]],
+        report["critical_failure"],
+    )
+    if result["auto_replan"]["triggered"]:
         print("Auto replan triggered.")
-        plan = auto_replan_stub(plan, checks)
-        save_plan(plan)
-        score2, checks2, critical_failure2 = run_qa(plan)
+        if result["auto_replan"]["blocked"]:
+            print(f"Auto replan blocked by manual fields: {', '.join(result['auto_replan']['blocked'])}")
+            return
+        if result["auto_replan"]["actions"]:
+            print("Auto replan actions:")
+            for action in result["auto_replan"]["actions"]:
+                print(f"- {action}")
         print("Post-replan QA:")
-        print_qa(score2, checks2, critical_failure2)
+        post = result["qa"]
+        print_qa(
+            post["score"],
+            [CheckResult(**check) for check in post["checks"]],
+            post["critical_failure"],
+        )
 
 
 def cmd_decide(args: argparse.Namespace) -> None:
@@ -821,56 +1301,67 @@ def cmd_risk(args: argparse.Namespace) -> None:
 
 
 def cmd_evidence(args: argparse.Namespace) -> None:
-    plan = load_plan()
-    add_evidence(
-        plan,
-        args.claim.strip(),
-        args.source.strip() if args.source else "manual",
-        args.confidence,
-        args.axis or "",
-        args.date or "",
-    )
-    if args.reference:
-        plan.setdefault("references", []).append(args.reference.strip())
-    save_plan(plan)
-    append_jsonl(
-        EVENTS_PATH,
-        {
-            "ts": now_iso(),
-            "type": "evidence_added",
-            "source": "cmd_evidence",
-            "claim": args.claim.strip(),
-            "axis": normalize_axis_label(args.axis) if args.axis else "",
-            "confidence": args.confidence,
-        },
+    claim = ensure_non_empty_text(args.claim, "claim")
+    mutate_plan_state(
+        lambda plan: (
+            add_evidence(
+                plan,
+                claim,
+                args.source.strip() if args.source else "manual",
+                ensure_confidence(args.confidence),
+                args.axis or "",
+                args.date or "",
+            ),
+            plan.setdefault("references", []).append(args.reference.strip()) if args.reference else None,
+        ),
+        event_payloads=[
+            {
+                "ts": now_iso(),
+                "type": "evidence_added",
+                "source": "cmd_evidence",
+                "claim": claim,
+                "axis": normalize_axis_label(args.axis) if args.axis else "",
+                "confidence": ensure_confidence(args.confidence),
+            }
+        ],
     )
     print("Evidence recorded.")
 
 
 def cmd_hypothesis(args: argparse.Namespace) -> None:
-    plan = load_plan()
+    hypothesis = ensure_non_empty_text(args.hypothesis, "hypothesis")
     payload = {
         "ts": now_iso(),
-        "hypothesis": args.hypothesis.strip(),
+        "hypothesis": hypothesis,
         "metric": args.metric.strip() if args.metric else "",
         "target": args.target.strip() if args.target else "",
         "window": args.window.strip() if args.window else "",
         "status": args.status,
         "outcome": args.outcome.strip() if args.outcome else "",
     }
-    plan.setdefault("hypothesis_log", []).append(payload)
-    if args.evidence:
-        add_evidence(plan, args.evidence.strip(), "hypothesis-test", args.confidence, args.axis or "", args.date or "")
-    save_plan(plan)
-    append_jsonl(
-        EVENTS_PATH,
-        {
-            "ts": now_iso(),
-            "type": "hypothesis_added",
-            "source": "cmd_hypothesis",
-            "status": args.status,
-            "hypothesis": args.hypothesis.strip(),
-        },
+    mutate_plan_state(
+        lambda plan: (
+            plan.setdefault("hypothesis_log", []).append(payload),
+            add_evidence(
+                plan,
+                ensure_non_empty_text(args.evidence, "evidence"),
+                "hypothesis-test",
+                ensure_confidence(args.confidence),
+                args.axis or "",
+                args.date or "",
+            )
+            if args.evidence
+            else None,
+        ),
+        event_payloads=[
+            {
+                "ts": now_iso(),
+                "type": "hypothesis_added",
+                "source": "cmd_hypothesis",
+                "status": args.status,
+                "hypothesis": hypothesis,
+            }
+        ],
     )
     print("Hypothesis recorded.")
 
@@ -879,6 +1370,12 @@ def cmd_qa(_: argparse.Namespace) -> None:
     plan = load_plan()
     score, checks, critical_failure = run_qa(plan)
     print_qa(score, checks, critical_failure)
+
+
+def cmd_validate(_: argparse.Namespace) -> None:
+    plan = load_plan()
+    report = validate_plan_shape(plan)
+    print(json.dumps(report, indent=2, ensure_ascii=False))
 
 
 def cmd_show(_: argparse.Namespace) -> None:
@@ -902,6 +1399,19 @@ def cmd_show(_: argparse.Namespace) -> None:
     print(f"Evidence Items: {summary['evidence_count']}")
     print(f"Hypotheses: {summary['hypothesis_count']}")
     print(f"Risks: {summary['risk_count']}")
+    if summary["recent_auto_replan"]:
+        recent = summary["recent_auto_replan"]
+        print(
+            "Recent Auto Replan: "
+            f"{recent['initial_result']} -> {recent['final_result']} "
+            f"(score delta: {recent['score_delta']})"
+        )
+        if recent["blocked"]:
+            print(f"Recent Auto Replan Blocked: {', '.join(recent['blocked'])}")
+        if recent["actions"]:
+            print("Recent Auto Replan Actions:")
+            for action in recent["actions"]:
+                print(f"- {action}")
 
 
 def cmd_insight(args: argparse.Namespace) -> None:
@@ -957,22 +1467,26 @@ def cmd_insight(args: argparse.Namespace) -> None:
     }
 
     if args.apply:
-        for key, values in proposal.items():
-            plan.setdefault(key, []).extend(values)
-        if references:
-            plan.setdefault("references", []).extend(references)
-            for ref in references[:3]:
-                add_evidence(plan, f"Reference captured for topic '{topic}'.", ref, 60, "market_insights")
-        save_plan(plan)
-        append_jsonl(
-            EVENTS_PATH,
-            {
-                "ts": now_iso(),
-                "type": "insight_generated",
-                "source": "cmd_insight",
-                "topic": topic,
-                "applied": True,
-            },
+        mutate_plan_state(
+            lambda current_plan: (
+                [current_plan.setdefault(key, []).extend(values) for key, values in proposal.items()],
+                current_plan.setdefault("references", []).extend(references) if references else None,
+                [
+                    add_evidence(current_plan, f"Reference captured for topic '{topic}'.", ref, 60, "market_insights")
+                    for ref in references[:3]
+                ]
+                if references
+                else None,
+            ),
+            event_payloads=[
+                {
+                    "ts": now_iso(),
+                    "type": "insight_generated",
+                    "source": "cmd_insight",
+                    "topic": topic,
+                    "applied": True,
+                }
+            ],
         )
         print("Insight pack applied to current plan.")
 
@@ -1072,21 +1586,23 @@ def cmd_review(args: argparse.Namespace) -> None:
 
     if args.apply:
         cycle_note = f"[review:{period}] score={score}/{total}; missing_axes={','.join(missing_axes) if missing_axes else 'none'}"
-        add_evidence(plan, cycle_note, "review-cycle", 70, "evolution_insights")
-        plan.setdefault("evolution_insights", []).append(
-            f"Review outcome for {period}: prioritize {missing_axes[0] if missing_axes else 'quality maintenance'}."
-        )
-        save_plan(plan)
-        append_jsonl(
-            EVENTS_PATH,
-            {
-                "ts": now_iso(),
-                "type": "review",
-                "source": "cmd_review",
-                "period": period,
-                "score": score,
-                "critical_failure": critical_failure,
-            },
+        mutate_plan_state(
+            lambda current_plan: (
+                add_evidence(current_plan, cycle_note, "review-cycle", 70, "evolution_insights"),
+                current_plan.setdefault("evolution_insights", []).append(
+                    f"Review outcome for {period}: prioritize {missing_axes[0] if missing_axes else 'quality maintenance'}."
+                ),
+            ),
+            event_payloads=[
+                {
+                    "ts": now_iso(),
+                    "type": "review",
+                    "source": "cmd_review",
+                    "period": period,
+                    "score": score,
+                    "critical_failure": critical_failure,
+                }
+            ],
         )
         report["applied"] = True
 
@@ -1142,27 +1658,29 @@ def cmd_ideate(args: argparse.Namespace) -> None:
             raise SystemExit(f"--apply must be between 1 and {len(ideas)}")
 
         selected = ideas[choice]
-        plan = load_plan()
-        plan["goal"] = selected["goal"]
-        plan["success_metric"] = selected["success_metric"]
-        plan["deadline"] = selected["deadline"]
-        plan["constraints"] = selected["constraints"]
-        plan["assumptions"] = selected["assumptions"]
-        plan["plan_tasks"] = selected["plan_tasks"]
-        plan["execution_tasks"] = selected["execution_tasks"]
-        plan["experiments"] = selected["experiments"]
-        plan["definition_of_done"] = selected["definition_of_done"]
-        save_plan(plan)
-
-        append_jsonl(
-            EVENTS_PATH,
-            {
-                "ts": now_iso(),
-                "type": "idea_applied",
-                "source": "cmd_ideate",
-                "selected_index": args.apply,
-                "goal": selected["goal"],
-            },
+        plan = mutate_plan_state(
+            lambda current_plan: current_plan.update(
+                {
+                    "goal": selected["goal"],
+                    "success_metric": selected["success_metric"],
+                    "deadline": selected["deadline"],
+                    "constraints": selected["constraints"],
+                    "assumptions": selected["assumptions"],
+                    "plan_tasks": selected["plan_tasks"],
+                    "execution_tasks": selected["execution_tasks"],
+                    "experiments": selected["experiments"],
+                    "definition_of_done": selected["definition_of_done"],
+                }
+            ),
+            event_payloads=[
+                {
+                    "ts": now_iso(),
+                    "type": "idea_applied",
+                    "source": "cmd_ideate",
+                    "selected_index": args.apply,
+                    "goal": selected["goal"],
+                }
+            ],
         )
         print(f"Applied idea #{args.apply} to current plan.")
         score, checks, critical_failure = run_qa(plan)
@@ -1263,6 +1781,9 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("qa")
     s.set_defaults(func=cmd_qa)
 
+    s = sub.add_parser("validate")
+    s.set_defaults(func=cmd_validate)
+
     s = sub.add_parser("show")
     s.set_defaults(func=cmd_show)
 
@@ -1298,8 +1819,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     parser = build_parser()
-    args = parser.parse_args()
-    args.func(args)
+    try:
+        args = parser.parse_args()
+        args.func(args)
+    except ValueError as exc:
+        raise SystemExit(str(exc))
 
 
 if __name__ == "__main__":
