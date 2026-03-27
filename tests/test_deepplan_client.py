@@ -147,6 +147,40 @@ class DeepPlanClientTests(unittest.TestCase):
         self.assertEqual(restored["plan"]["goal"], "client previous first")
         self.assertNotEqual(first["fingerprint"], second["fingerprint"])
 
+    def test_capture_evidence_cycle_returns_typed_multi_step_result(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            client = DeepPlanClient(transport=handler_transport)
+            client.update_plan(
+                {
+                    "goal": "client evidence cycle",
+                    "success_metric": "Reach 2 pilots",
+                    "deadline": "2026-04-03",
+                }
+            )
+            result = client.capture_evidence_cycle(
+                {
+                    "claim": "Repeated pilot friction",
+                    "source": "pilot-call",
+                    "confidence": 74,
+                    "axis": "market",
+                },
+                replan_payload={"plan_task": "Tighten onboarding loop"},
+                history_limit=2,
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["operation"], "capture_evidence_cycle")
+        self.assertEqual(result["result_type"], "planning_cycle")
+        self.assertNotEqual(result["pre_fingerprint"], result["post_fingerprint"])
+        self.assertIn("evidence", result["changed_fields"])
+        self.assertIn("plan_tasks", result["changed_fields"])
+        self.assertEqual(result["evidence_result"]["plan"]["evidence"][-1]["claim"], "Repeated pilot friction")
+        self.assertEqual(result["replan_result"]["plan"]["plan_tasks"][-1], "Tighten onboarding loop")
+        self.assertEqual(result["post_cycle"]["plan"]["evidence"][-1]["source"], "pilot-call")
+        self.assertEqual(result["post_cycle"]["history_limit"], 2)
+        self.assertEqual(client.tracked_fingerprint, result["post_fingerprint"])
+
     def test_stale_fingerprint_raises_client_error(self):
         with DeepPlanStateIsolation():
             deepplan.ensure_state()
