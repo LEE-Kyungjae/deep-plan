@@ -347,6 +347,7 @@ preview = client.preview_restore(previous=True)
 ```
 
 High-level client wrappers now raise `DeepPlanConflictError` for stale fingerprint conflicts and `DeepPlanClientOperationError` for step-scoped multi-call failures.
+By default, retry-after-refresh is only enabled for `update_plan`; append-style operations like `add_evidence` and `replan` require `allow_non_idempotent_retry=True`.
 
 ## Agent Input Mapping
 

@@ -301,6 +301,53 @@ class DeepPlanClientTests(unittest.TestCase):
         self.assertEqual(ctx.exception.step, "mutation")
         self.assertEqual(ctx.exception.status, 400)
 
+    def test_apply_and_get_cycle_with_retry_does_not_retry_add_evidence_by_default(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            client = DeepPlanClient(transport=handler_transport)
+            initial = client.get_plan()
+            client.update_plan(
+                {
+                    "goal": "retry add evidence baseline",
+                    "success_metric": "Reach 2 pilots",
+                    "deadline": "2026-04-03",
+                }
+            )
+            with self.assertRaises(DeepPlanConflictError) as ctx:
+                client.apply_and_get_cycle_with_retry(
+                    "add_evidence",
+                    {"claim": "Pilot friction repeated", "source": "pilot-call", "confidence": 74},
+                    expected_fingerprint=initial["fingerprint"],
+                )
+
+        self.assertEqual(ctx.exception.operation, "add_evidence")
+        self.assertEqual(ctx.exception.step, "mutation")
+        self.assertEqual(ctx.exception.expected_fingerprint, initial["fingerprint"])
+
+    def test_apply_and_get_cycle_with_retry_can_opt_in_for_add_evidence(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            client = DeepPlanClient(transport=handler_transport)
+            initial = client.get_plan()
+            client.update_plan(
+                {
+                    "goal": "retry add evidence opt-in",
+                    "success_metric": "Reach 2 pilots",
+                    "deadline": "2026-04-03",
+                }
+            )
+            result = client.apply_and_get_cycle_with_retry(
+                "add_evidence",
+                {"claim": "Opt-in retry evidence", "source": "pilot-call", "confidence": 74},
+                expected_fingerprint=initial["fingerprint"],
+                allow_non_idempotent_retry=True,
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["retried"])
+        self.assertEqual(result["operation"], "add_evidence")
+        self.assertEqual(result["post_cycle"]["plan"]["evidence"][-1]["claim"], "Opt-in retry evidence")
+
 
 if __name__ == "__main__":
     unittest.main()

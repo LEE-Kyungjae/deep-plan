@@ -246,6 +246,7 @@ class DeepPlanClient:
         *,
         history_limit: int = 10,
         expected_fingerprint: str = "",
+        allow_non_idempotent_retry: bool = False,
     ) -> Dict[str, Any]:
         attempt = 1
         try:
@@ -260,6 +261,8 @@ class DeepPlanClient:
             return result
         except DeepPlanConflictError as exc:
             if not exc.can_refresh:
+                raise
+            if operation != "update_plan" and not allow_non_idempotent_retry:
                 raise
             refreshed = self.get_cycle(history_limit=history_limit)
             attempt += 1
