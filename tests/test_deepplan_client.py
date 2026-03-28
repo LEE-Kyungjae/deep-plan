@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 import deepplan
+from deepplan_sdk import DeepPlanClient as PackagedDeepPlanClient
 from deepplan_client import DeepPlanClient, DeepPlanClientError, DeepPlanClientOperationError, DeepPlanConflictError, DeepPlanHealthGateError
 from deepplan_server import DeepPlanHandler
 
@@ -78,6 +79,9 @@ def handler_transport(method: str, path: str, body=None, headers=None):
 
 
 class DeepPlanClientTests(unittest.TestCase):
+    def test_deepplan_sdk_package_exports_client_surface(self):
+        self.assertIs(PackagedDeepPlanClient, DeepPlanClient)
+
     def test_get_plan_tracks_fingerprint(self):
         with DeepPlanStateIsolation():
             deepplan.ensure_state()

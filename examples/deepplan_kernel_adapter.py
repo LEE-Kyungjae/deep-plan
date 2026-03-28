@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 from typing import Any, Dict
 
-from deepplan_client import (
+from deepplan_sdk import (
     DeepPlanClient,
     DeepPlanClientOperationError,
     DeepPlanConflictError,

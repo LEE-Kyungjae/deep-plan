@@ -202,6 +202,12 @@ For multi-step append flows such as `capture_evidence_cycle()`, pass one host-le
 `idempotency_key` and let the client derive stable step keys for `add_evidence`
 and `replan`.
 
+Preferred import surface for host repos:
+
+```python
+from deepplan_sdk import DeepPlanClient
+```
+
 ## Non-Goals
 
 This guide does not cover:

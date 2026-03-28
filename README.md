@@ -330,10 +330,10 @@ Tool responses use stable `ok`, `tool_name`, and `result_type` fields.
 
 ## Python Client
 
-The repo includes a lightweight integration-facing client in `deepplan_client.py`.
+The repo includes a lightweight integration-facing client in `deepplan_sdk/`.
 
 ```python
-from deepplan_client import (
+from deepplan_sdk import (
     DeepPlanClient,
     DeepPlanClientOperationError,
     DeepPlanConflictError,
@@ -382,6 +382,7 @@ See also:
 
 - `docs/integration-agentscope.md`
 - `examples/deepplan_kernel_adapter.py`
+- `deepplan_client.py` remains as a compatibility import path
 
 ## Product Thesis
 
