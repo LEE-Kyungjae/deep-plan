@@ -340,32 +340,21 @@ class DeepPlanClient:
         *,
         replan_payload: Optional[Dict[str, Any]] = None,
         history_limit: int = 10,
+        idempotency_key: str = "",
     ) -> Dict[str, Any]:
         before = self.get_cycle(history_limit=history_limit)
+        cycle_key = str(idempotency_key).strip()
+        evidence_key = f"{cycle_key}:evidence" if cycle_key else ""
+        replan_key = f"{cycle_key}:replan" if cycle_key else ""
         try:
-            evidence_result = self.add_evidence(evidence_payload)
+            evidence_result = self.add_evidence(evidence_payload, idempotency_key=evidence_key)
         except DeepPlanConflictError as exc:
             raise exc.with_context("capture_evidence_cycle", "add_evidence") from exc
         except DeepPlanClientError as exc:
             raise DeepPlanClientOperationError("capture_evidence_cycle", "add_evidence", exc) from exc
         replan_input = dict(replan_payload or {})
-        claim = str(evidence_payload.get("claim", "")).strip()
-        source = str(evidence_payload.get("source", "")).strip()
-        confidence = evidence_payload.get("confidence")
-        axis = str(evidence_payload.get("axis", "")).strip()
-        date = str(evidence_payload.get("date", "")).strip()
-        if claim and "evidence" not in replan_input:
-            replan_input["evidence"] = claim
-        if source and "evidence_source" not in replan_input:
-            replan_input["evidence_source"] = source
-        if isinstance(confidence, int) and not isinstance(confidence, bool) and "evidence_confidence" not in replan_input:
-            replan_input["evidence_confidence"] = confidence
-        if axis and "evidence_axis" not in replan_input:
-            replan_input["evidence_axis"] = axis
-        if date and "evidence_date" not in replan_input:
-            replan_input["evidence_date"] = date
         try:
-            replan_result = self.replan(replan_input)
+            replan_result = self.replan(replan_input, idempotency_key=replan_key)
         except DeepPlanConflictError as exc:
             raise exc.with_context("capture_evidence_cycle", "replan") from exc
         except DeepPlanClientError as exc:
@@ -386,4 +375,6 @@ class DeepPlanClient:
         )
         result["evidence_result"] = evidence_result
         result["replan_result"] = replan_result
+        if cycle_key:
+            result["idempotency_key"] = cycle_key
         return result

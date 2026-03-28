@@ -366,6 +366,7 @@ retried = client.apply_and_get_cycle_with_retry(
 cycle_result = client.capture_evidence_cycle(
     {"claim": "Pilot friction repeated", "source": "pilot-call", "confidence": 74, "axis": "market"},
     replan_payload={"plan_task": "Tighten onboarding loop"},
+    idempotency_key="pilot-friction-cycle-1",
 )
 ```
 

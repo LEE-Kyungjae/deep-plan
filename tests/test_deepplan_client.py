@@ -183,6 +183,51 @@ class DeepPlanClientTests(unittest.TestCase):
         self.assertIn("add_evidence", result["step_results"])
         self.assertIn("replan", result["step_results"])
 
+    def test_capture_evidence_cycle_reuses_idempotency_key_without_duplicate_steps(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            client = DeepPlanClient(transport=handler_transport)
+            client.update_plan(
+                {
+                    "goal": "idempotent capture evidence cycle",
+                    "success_metric": "Reach 2 pilots",
+                    "deadline": "2026-04-03",
+                }
+            )
+            first = client.capture_evidence_cycle(
+                {
+                    "claim": "Repeated onboarding dropoff",
+                    "source": "pilot-call",
+                    "confidence": 76,
+                    "axis": "market",
+                },
+                replan_payload={"plan_task": "Tighten onboarding loop"},
+                history_limit=2,
+                idempotency_key="capture-1",
+            )
+            second = client.capture_evidence_cycle(
+                {
+                    "claim": "Repeated onboarding dropoff",
+                    "source": "pilot-call",
+                    "confidence": 76,
+                    "axis": "market",
+                },
+                replan_payload={"plan_task": "Tighten onboarding loop"},
+                history_limit=2,
+                idempotency_key="capture-1",
+            )
+
+        self.assertEqual(first["idempotency_key"], "capture-1")
+        self.assertEqual(second["idempotency_key"], "capture-1")
+        self.assertFalse(first["evidence_result"]["idempotency_replayed"])
+        self.assertFalse(first["replan_result"]["idempotency_replayed"])
+        self.assertTrue(second["evidence_result"]["idempotency_replayed"])
+        self.assertTrue(second["replan_result"]["idempotency_replayed"])
+        self.assertEqual(first["post_fingerprint"], second["post_fingerprint"])
+        evidence_claims = [item["claim"] for item in second["post_cycle"]["plan"]["evidence"] if item.get("claim") == "Repeated onboarding dropoff"]
+        self.assertEqual(len(evidence_claims), 1)
+        self.assertEqual(second["post_cycle"]["plan"]["plan_tasks"].count("Tighten onboarding loop"), 1)
+
     def test_apply_and_get_cycle_wraps_update_plan_with_post_cycle_snapshot(self):
         with DeepPlanStateIsolation():
             deepplan.ensure_state()

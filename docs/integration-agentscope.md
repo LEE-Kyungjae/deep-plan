@@ -198,6 +198,10 @@ For a separate AgentScope-style repo:
 - `restore_revision`
 - `capture_evidence_cycle`
 
+For multi-step append flows such as `capture_evidence_cycle()`, pass one host-level
+`idempotency_key` and let the client derive stable step keys for `add_evidence`
+and `replan`.
+
 ## Non-Goals
 
 This guide does not cover:
