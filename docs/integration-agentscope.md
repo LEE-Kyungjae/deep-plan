@@ -208,6 +208,12 @@ Preferred import surface for host repos:
 from deepplan_sdk import DeepPlanClient
 ```
 
+For local development against this repo:
+
+```bash
+python3 -m pip install -e /path/to/deep-plan
+```
+
 ## Non-Goals
 
 This guide does not cover:

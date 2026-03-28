@@ -384,6 +384,12 @@ See also:
 - `examples/deepplan_kernel_adapter.py`
 - `deepplan_client.py` remains as a compatibility import path
 
+Install the SDK surface locally from this repo:
+
+```bash
+python3 -m pip install -e .
+```
+
 ## Product Thesis
 
 In the AI era, execution is increasingly commoditized.

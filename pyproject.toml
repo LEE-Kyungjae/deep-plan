@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deepplan"
+version = "0.5.0"
+description = "A local, agent-friendly planning kernel with a thin Python SDK surface."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+  { name = "LEE Kyungjae" },
+]
+keywords = ["planning", "agents", "startup", "product-strategy", "local-first"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[tool.setuptools]
+py-modules = [
+  "deepplan",
+  "deepplan_agent",
+  "deepplan_client",
+  "deepplan_server",
+  "deepplan_store",
+]
+
+[tool.setuptools.packages.find]
+include = ["deepplan_sdk*"]

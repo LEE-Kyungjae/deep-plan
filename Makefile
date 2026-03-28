@@ -1,7 +1,7 @@
 PYTHON ?= python3
 PYCACHE_PREFIX ?= /tmp/pycache
 
-.PHONY: test compile check schema-check
+.PHONY: test compile check schema-check package-check
 
 test:
 	PYTHONPYCACHEPREFIX=$(PYCACHE_PREFIX) $(PYTHON) -m unittest tests.test_deepplan tests.test_deepplan_server tests.test_deepplan_client
@@ -13,3 +13,6 @@ check: compile test
 
 schema-check:
 	$(PYTHON) deepplan.py schema --check
+
+package-check:
+	PYTHONPYCACHEPREFIX=$(PYCACHE_PREFIX) $(PYTHON) -m py_compile deepplan_sdk/__init__.py deepplan_sdk/client.py
