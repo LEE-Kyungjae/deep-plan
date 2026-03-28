@@ -2,7 +2,7 @@
 import argparse
 import json
 import shlex
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from deepplan import (
     add_evidence,
@@ -18,6 +18,8 @@ from deepplan import (
     plan_summary,
     qa_autoreplan_result,
     qa_report,
+    record_idempotency_result,
+    replay_idempotency_result,
     resolve_revision_reference,
     restore_preview,
     save_validated_plan,
@@ -120,6 +122,7 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "expected_fingerprint": {"type": "string"},
+                "idempotency_key": {"type": "string"},
                 "evidence": {"type": "string"},
                 "evidence_source": {"type": "string"},
                 "evidence_confidence": {"type": "integer"},
@@ -203,6 +206,7 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "expected_fingerprint": {"type": "string"},
+                "idempotency_key": {"type": "string"},
                 "claim": {"type": "string"},
                 "source": {"type": "string"},
                 "confidence": {"type": "integer"},
@@ -221,6 +225,7 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "expected_fingerprint": {"type": "string"},
+                "idempotency_key": {"type": "string"},
                 "hypothesis": {"type": "string"},
                 "metric": {"type": "string"},
                 "target": {"type": "string"},
@@ -265,6 +270,11 @@ def ensure_object_payload(payload: Dict[str, Any]) -> None:
 def validate_expected_fingerprint(payload: Dict[str, Any]) -> None:
     if "expected_fingerprint" in payload and not isinstance(payload["expected_fingerprint"], str):
         raise ValueError("expected_fingerprint must be a string")
+
+
+def validate_idempotency_key(payload: Dict[str, Any]) -> None:
+    if "idempotency_key" in payload and not isinstance(payload["idempotency_key"], str):
+        raise ValueError("idempotency_key must be a string")
 
 
 def validate_update_payload(payload: Dict[str, Any]) -> None:
@@ -341,7 +351,8 @@ def validate_preview_restore_payload(payload: Dict[str, Any]) -> None:
 def validate_evidence_payload(payload: Dict[str, Any]) -> None:
     ensure_object_payload(payload)
     validate_expected_fingerprint(payload)
-    allowed = {"claim", "source", "confidence", "axis", "date", "reference", "expected_fingerprint"}
+    validate_idempotency_key(payload)
+    allowed = {"claim", "source", "confidence", "axis", "date", "reference", "expected_fingerprint", "idempotency_key"}
     unknown = sorted(set(payload) - allowed)
     if unknown:
         raise ValueError(f"unknown add_evidence fields: {', '.join(unknown)}")
@@ -358,7 +369,8 @@ def validate_evidence_payload(payload: Dict[str, Any]) -> None:
 def validate_hypothesis_payload(payload: Dict[str, Any]) -> None:
     ensure_object_payload(payload)
     validate_expected_fingerprint(payload)
-    allowed = {"hypothesis", "metric", "target", "window", "status", "outcome", "evidence", "confidence", "axis", "date", "expected_fingerprint"}
+    validate_idempotency_key(payload)
+    allowed = {"hypothesis", "metric", "target", "window", "status", "outcome", "evidence", "confidence", "axis", "date", "expected_fingerprint", "idempotency_key"}
     unknown = sorted(set(payload) - allowed)
     if unknown:
         raise ValueError(f"unknown add_hypothesis fields: {', '.join(unknown)}")
@@ -378,8 +390,10 @@ def validate_hypothesis_payload(payload: Dict[str, Any]) -> None:
 def validate_replan_payload(payload: Dict[str, Any]) -> None:
     ensure_object_payload(payload)
     validate_expected_fingerprint(payload)
+    validate_idempotency_key(payload)
     allowed = {
         "expected_fingerprint",
+        "idempotency_key",
         "evidence",
         "evidence_source",
         "evidence_confidence",
@@ -431,6 +445,23 @@ def enrich_tool_result(name: str, result_type: str, payload: Dict[str, Any]) -> 
     enriched["tool_name"] = name
     enriched["result_type"] = result_type
     return enriched
+
+
+def maybe_replay_idempotent_tool_result(name: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    idempotency_key = str(payload.get("idempotency_key", "")).strip()
+    if not idempotency_key:
+        return None
+    replayed = replay_idempotency_result(name, idempotency_key)
+    if not replayed:
+        return None
+    return enrich_tool_result(name, "mutation", replayed)
+
+
+def finalize_idempotent_tool_result(name: str, payload: Dict[str, Any], result: Dict[str, Any]) -> Dict[str, Any]:
+    idempotency_key = str(payload.get("idempotency_key", "")).strip()
+    if not idempotency_key:
+        return result
+    return record_idempotency_result(name, idempotency_key, result)
 
 
 def tool_schema_contract_report() -> Dict[str, Any]:
@@ -534,6 +565,9 @@ def execute_tool(name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 
     if name == "replan":
         validate_replan_payload(payload)
+        replayed = maybe_replay_idempotent_tool_result(name, payload)
+        if replayed:
+            return replayed
         result = mutate_plan_state(
             lambda plan: apply_replan_payload(plan, payload),
             include_autoreplan=True,
@@ -541,14 +575,15 @@ def execute_tool(name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
             revision_source="replan",
             revision_reason=str(payload.get("evidence", "")).strip(),
         )
-        return enrich_tool_result(name, "mutation", {
+        response = {
             "plan": result["plan"],
             "summary": plan_summary(result["plan"]),
             "validation": validate_plan_shape(result["plan"]),
             "fingerprint": plan_fingerprint(result["plan"]),
             "qa": result["qa"],
             "auto_replan": result["auto_replan"],
-        })
+        }
+        return enrich_tool_result(name, "mutation", finalize_idempotent_tool_result(name, payload, response))
 
     if name == "update_plan":
         validate_update_payload(payload)
@@ -570,6 +605,9 @@ def execute_tool(name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 
     if name == "add_evidence":
         validate_evidence_payload(payload)
+        replayed = maybe_replay_idempotent_tool_result(name, payload)
+        if replayed:
+            return replayed
         claim = str(payload.get("claim", "")).strip()
         plan = mutate_plan_state(
             lambda plan: (
@@ -589,14 +627,18 @@ def execute_tool(name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
             revision_source="add_evidence",
             revision_reason=claim,
         )
+        response = {"plan": plan, "summary": plan_summary(plan), "validation": validate_plan_shape(plan), "fingerprint": plan_response(plan)["fingerprint"], "qa": qa_report(plan)}
         return enrich_tool_result(
             name,
             "mutation",
-            {"plan": plan, "summary": plan_summary(plan), "validation": validate_plan_shape(plan), "fingerprint": plan_response(plan)["fingerprint"], "qa": qa_report(plan)},
+            finalize_idempotent_tool_result(name, payload, response),
         )
 
     if name == "add_hypothesis":
         validate_hypothesis_payload(payload)
+        replayed = maybe_replay_idempotent_tool_result(name, payload)
+        if replayed:
+            return replayed
         hypothesis = str(payload.get("hypothesis", "")).strip()
         status = str(payload.get("status", "open")).strip() or "open"
         evidence = str(payload.get("evidence", "")).strip()
@@ -628,10 +670,11 @@ def execute_tool(name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
             revision_source="add_hypothesis",
             revision_reason=hypothesis,
         )
+        response = {"plan": plan, "summary": plan_summary(plan), "validation": validate_plan_shape(plan), "fingerprint": plan_response(plan)["fingerprint"], "qa": qa_report(plan)}
         return enrich_tool_result(
             name,
             "mutation",
-            {"plan": plan, "summary": plan_summary(plan), "validation": validate_plan_shape(plan), "fingerprint": plan_response(plan)["fingerprint"], "qa": qa_report(plan)},
+            finalize_idempotent_tool_result(name, payload, response),
         )
 
     raise ValueError(f"unknown tool: {name}")

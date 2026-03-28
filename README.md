@@ -210,12 +210,14 @@ The Python client has typed conflict and retry semantics:
 - `DeepPlanConflictError`: stale fingerprint conflict
 - `DeepPlanClientOperationError`: higher-level multi-step failure
 - `DeepPlanHealthGateError`: optional write blocked by degraded storage health
+- append-style operations can carry `idempotency_key` to safely dedupe retries
 
 Default retry policy is conservative:
 
 - automatic refresh-and-retry is enabled for `update_plan`
 - `restore_revision` is also treated as safe overwrite-style retry
 - append-style operations such as `add_evidence` and `replan` require `allow_non_idempotent_retry=True`
+- when opt-in retry is enabled for append-style operations, the client injects an `idempotency_key` if one is missing
 - generalized write flows can require healthy storage with `require_healthy=True`
 
 ## CLI

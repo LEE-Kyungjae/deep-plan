@@ -403,6 +403,53 @@ class DeepPlanClientTests(unittest.TestCase):
         self.assertTrue(result["retried"])
         self.assertEqual(result["operation"], "add_evidence")
         self.assertEqual(result["post_cycle"]["plan"]["evidence"][-1]["claim"], "Opt-in retry evidence")
+        self.assertTrue(result["mutation_result"]["idempotency_key"].startswith("add_evidence_"))
+
+    def test_add_evidence_idempotency_key_replays_without_duplicate_write(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            client = DeepPlanClient(transport=handler_transport)
+            first = client.add_evidence(
+                {"claim": "Idempotent evidence", "source": "pilot-call", "confidence": 71},
+                idempotency_key="client-evidence-1",
+            )
+            second = client.add_evidence(
+                {"claim": "Idempotent evidence", "source": "pilot-call", "confidence": 71},
+                idempotency_key="client-evidence-1",
+            )
+
+        self.assertFalse(first["idempotency_replayed"])
+        self.assertTrue(second["idempotency_replayed"])
+        self.assertEqual(len(second["plan"]["evidence"]), 1)
+        self.assertEqual(first["fingerprint"], second["fingerprint"])
+
+    def test_apply_and_get_cycle_with_retry_injects_idempotency_key_for_add_evidence_opt_in(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            client = DeepPlanClient(transport=handler_transport)
+            initial = client.update_plan(
+                {
+                    "goal": "auto key evidence retry",
+                    "success_metric": "Reach 2 pilots",
+                    "deadline": "2026-04-03",
+                }
+            )
+            deepplan.mutate_plan_state(
+                lambda plan: plan.update({"review_cadence": "weekly"}),
+                expected_fingerprint=initial["fingerprint"],
+                revision_source="test_auto_key_conflict",
+            )
+            result = client.apply_and_get_cycle_with_retry(
+                "add_evidence",
+                {"claim": "Auto-key evidence", "source": "pilot-call", "confidence": 70},
+                expected_fingerprint=initial["fingerprint"],
+                allow_non_idempotent_retry=True,
+            )
+
+        self.assertTrue(result["retried"])
+        self.assertTrue(result["mutation_result"]["idempotency_key"].startswith("add_evidence_"))
+        matching_claims = [item for item in result["post_cycle"]["plan"]["evidence"] if item.get("claim") == "Auto-key evidence"]
+        self.assertEqual(len(matching_claims), 1)
 
     def test_apply_and_get_cycle_can_block_on_degraded_health(self):
         with DeepPlanStateIsolation():

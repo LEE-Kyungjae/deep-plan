@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from deepplan_store import FilePlanStore, PlanConflictError
 
@@ -510,6 +510,61 @@ def _append_jsonl_unlocked(path: Path, payload: Dict) -> None:
 def append_jsonl(path: Path, payload: Dict) -> None:
     _sync_store_paths()
     STORE.append_jsonl(path, payload)
+
+
+def get_idempotency_record(scope: str, idempotency_key: str) -> Optional[Dict[str, Any]]:
+    wanted_scope = str(scope).strip()
+    wanted_key = str(idempotency_key).strip()
+    if not wanted_scope or not wanted_key:
+        return None
+    for item in reversed(read_jsonl(EVENTS_PATH)):
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("type", "")).strip() != "idempotency_record":
+            continue
+        if str(item.get("scope", "")).strip() != wanted_scope:
+            continue
+        if str(item.get("idempotency_key", "")).strip() != wanted_key:
+            continue
+        return item
+    return None
+
+
+def with_idempotency_metadata(result: Dict[str, Any], idempotency_key: str, *, replayed: bool) -> Dict[str, Any]:
+    enriched = json.loads(json.dumps(result))
+    enriched["idempotency_key"] = str(idempotency_key).strip()
+    enriched["idempotency_replayed"] = replayed
+    return enriched
+
+
+def record_idempotency_result(scope: str, idempotency_key: str, result: Dict[str, Any]) -> Dict[str, Any]:
+    normalized_scope = str(scope).strip()
+    normalized_key = str(idempotency_key).strip()
+    if not normalized_scope or not normalized_key:
+        return result
+    recorded = with_idempotency_metadata(result, normalized_key, replayed=False)
+    append_jsonl(
+        EVENTS_PATH,
+        {
+            "ts": now_iso(),
+            "type": "idempotency_record",
+            "scope": normalized_scope,
+            "idempotency_key": normalized_key,
+            "fingerprint": str(recorded.get("fingerprint", "")).strip(),
+            "result": recorded,
+        },
+    )
+    return recorded
+
+
+def replay_idempotency_result(scope: str, idempotency_key: str) -> Optional[Dict[str, Any]]:
+    record = get_idempotency_record(scope, idempotency_key)
+    if not record:
+        return None
+    result = record.get("result")
+    if not isinstance(result, dict):
+        return None
+    return with_idempotency_metadata(result, idempotency_key, replayed=True)
 
 
 def make_revision_entry(plan: Dict, source: str, reason: str = "", previous_fingerprint: str = "") -> Dict:

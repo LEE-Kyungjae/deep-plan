@@ -3,6 +3,7 @@ import json
 from dataclasses import dataclass
 from http.client import HTTPConnection
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from uuid import uuid4
 
 
 class DeepPlanClientError(RuntimeError):
@@ -77,6 +78,13 @@ def diff_top_level_fields(before: Dict[str, Any], after: Dict[str, Any]) -> List
         if before.get(key) != after.get(key):
             changed.append(key)
     return changed
+
+
+def with_optional_key(payload: Dict[str, Any], key: str, value: str) -> Dict[str, Any]:
+    enriched = dict(payload)
+    if value:
+        enriched[key] = value
+    return enriched
 
 
 def default_transport_factory(host: str, port: int, timeout: float = 10.0) -> RequestTransport:
@@ -194,11 +202,23 @@ class DeepPlanClient:
     def update_plan(self, payload: Dict[str, Any], *, expected_fingerprint: str = "") -> Dict[str, Any]:
         return self.request("POST", "/plan", body=payload, expected_fingerprint=expected_fingerprint, use_tracked_fingerprint=True)
 
-    def replan(self, payload: Dict[str, Any], *, expected_fingerprint: str = "") -> Dict[str, Any]:
-        return self.request("POST", "/replan", body=payload, expected_fingerprint=expected_fingerprint, use_tracked_fingerprint=True)
+    def replan(self, payload: Dict[str, Any], *, expected_fingerprint: str = "", idempotency_key: str = "") -> Dict[str, Any]:
+        return self.request(
+            "POST",
+            "/replan",
+            body=with_optional_key(payload, "idempotency_key", idempotency_key),
+            expected_fingerprint=expected_fingerprint,
+            use_tracked_fingerprint=True,
+        )
 
-    def add_evidence(self, payload: Dict[str, Any], *, expected_fingerprint: str = "") -> Dict[str, Any]:
-        return self.request("POST", "/evidence", body=payload, expected_fingerprint=expected_fingerprint, use_tracked_fingerprint=True)
+    def add_evidence(self, payload: Dict[str, Any], *, expected_fingerprint: str = "", idempotency_key: str = "") -> Dict[str, Any]:
+        return self.request(
+            "POST",
+            "/evidence",
+            body=with_optional_key(payload, "idempotency_key", idempotency_key),
+            expected_fingerprint=expected_fingerprint,
+            use_tracked_fingerprint=True,
+        )
 
     def run_tool(self, tool_name: str, payload: Dict[str, Any], *, expected_fingerprint: str = "") -> Dict[str, Any]:
         return self.request("POST", f"/tools/{tool_name}", body={"input": payload}, expected_fingerprint=expected_fingerprint)
@@ -276,11 +296,14 @@ class DeepPlanClient:
         allow_non_idempotent_retry: bool = False,
         require_healthy: bool = False,
     ) -> Dict[str, Any]:
+        operation_payload = dict(payload)
+        if operation in {"add_evidence", "replan"} and allow_non_idempotent_retry and not str(operation_payload.get("idempotency_key", "")).strip():
+            operation_payload["idempotency_key"] = f"{operation}_{uuid4().hex}"
         attempt = 1
         try:
             result = self.apply_and_get_cycle(
                 operation,
-                payload,
+                operation_payload,
                 history_limit=history_limit,
                 expected_fingerprint=expected_fingerprint,
                 require_healthy=require_healthy,
@@ -300,7 +323,7 @@ class DeepPlanClient:
             retry_fingerprint = str(refreshed.get("fingerprint", "")).strip() or exc.current_fingerprint
             result = self.apply_and_get_cycle(
                 operation,
-                payload,
+                operation_payload,
                 history_limit=history_limit,
                 expected_fingerprint=retry_fingerprint,
                 require_healthy=False,

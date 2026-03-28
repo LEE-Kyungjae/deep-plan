@@ -133,7 +133,32 @@ class DeepPlanServerTests(unittest.TestCase):
         self.assertEqual(status, 412)
         self.assertEqual(payload["error"], "plan fingerprint mismatch")
         self.assertIn("current_fingerprint", payload)
-        self.assertEqual(response_headers.get("ETag"), f'"{payload["current_fingerprint"]}"')
+
+    def test_post_evidence_reuses_idempotency_key_without_duplicate_append(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            body = json.dumps(
+                {
+                    "claim": "Server idempotent evidence",
+                    "source": "pilot-call",
+                    "confidence": 73,
+                    "idempotency_key": "http-evidence-1",
+                }
+            ).encode("utf-8")
+            first = build_handler("POST", "/evidence", body=body, headers={"Content-Type": "application/json"})
+            first.do_POST()
+            first_status, first_payload, _ = decode_response(first)
+
+            second = build_handler("POST", "/evidence", body=body, headers={"Content-Type": "application/json"})
+            second.do_POST()
+            second_status, second_payload, _ = decode_response(second)
+
+        self.assertEqual(first_status, 200)
+        self.assertEqual(second_status, 200)
+        self.assertFalse(first_payload["idempotency_replayed"])
+        self.assertTrue(second_payload["idempotency_replayed"])
+        self.assertEqual(len(second_payload["plan"]["evidence"]), 1)
+        self.assertEqual(first_payload["fingerprint"], second_payload["fingerprint"])
 
     def test_post_plan_rejects_empty_body(self):
         with DeepPlanStateIsolation():

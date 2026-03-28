@@ -73,6 +73,56 @@ class DeepPlanRegressionTests(unittest.TestCase):
         self.assertEqual(restore_tool, "restore_revision")
         self.assertEqual(restore_payload, {"previous": True})
 
+    def test_add_evidence_idempotency_key_replays_without_duplicate_append(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            first = deepplan_agent.execute_tool(
+                "add_evidence",
+                {
+                    "claim": "Repeated buyer pain",
+                    "source": "pilot-call",
+                    "confidence": 74,
+                    "idempotency_key": "evt-1",
+                },
+            )
+            second = deepplan_agent.execute_tool(
+                "add_evidence",
+                {
+                    "claim": "Repeated buyer pain",
+                    "source": "pilot-call",
+                    "confidence": 74,
+                    "idempotency_key": "evt-1",
+                },
+            )
+
+        self.assertFalse(first["idempotency_replayed"])
+        self.assertTrue(second["idempotency_replayed"])
+        self.assertEqual(len(second["plan"]["evidence"]), 1)
+        self.assertEqual(first["fingerprint"], second["fingerprint"])
+
+    def test_replan_idempotency_key_replays_without_duplicate_task_append(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            first = deepplan_agent.execute_tool(
+                "replan",
+                {
+                    "plan_task": "Refine activation hypothesis",
+                    "idempotency_key": "replan-1",
+                },
+            )
+            second = deepplan_agent.execute_tool(
+                "replan",
+                {
+                    "plan_task": "Refine activation hypothesis",
+                    "idempotency_key": "replan-1",
+                },
+            )
+
+        self.assertFalse(first["idempotency_replayed"])
+        self.assertTrue(second["idempotency_replayed"])
+        self.assertEqual(second["plan"]["plan_tasks"], ["Refine activation hypothesis"])
+        self.assertEqual(first["fingerprint"], second["fingerprint"])
+
     def test_qa_autoreplan_upgrades_thin_plan_to_pass(self):
         plan = deepplan.default_plan()
         plan["goal"] = "Test goal"
