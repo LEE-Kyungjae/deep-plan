@@ -12,6 +12,55 @@ It is built for the layer before execution:
 
 DeepPlan is intentionally not an execution orchestrator. It is the planning and decision layer that other tools, agents, and runtimes can build on top of.
 
+## Project Thesis
+
+DeepPlan exists because execution is getting cheaper while direction is not.
+
+In the AI era, more systems can generate code, content, tasks, and workflows.
+That does not solve the harder problem:
+
+- choosing the right direction
+- rejecting weak directions early
+- finding better evidence before execution hardens the wrong path
+- keeping product and business intent coherent over time
+
+DeepPlan is built on one belief:
+
+`Plan is the product.`
+
+This repo should keep pressure on the planning layer itself:
+
+- better goals
+- better hypotheses
+- better evidence
+- better failure detection
+- better replanning
+
+If planning is weak, faster execution only accelerates the wrong path.
+
+## Product Boundary
+
+DeepPlan is `plan-only` by design.
+
+DeepPlan should own:
+
+- idea discovery
+- direction setting
+- planning logic
+- success and failure criteria
+- evidence-backed replanning
+- revision-aware recovery
+
+DeepPlan should not own:
+
+- task execution orchestration
+- delivery automation
+- general agent runtime concerns
+- workflow scheduling
+- channel or chat surfaces
+
+Those layers can be built around DeepPlan, but they should not blur the purpose of this repo.
+
 ## What DeepPlan Is
 
 DeepPlan now has four access layers around the same planning core:
@@ -28,6 +77,17 @@ The core guarantees are:
 - revision snapshots and safe restore preview
 - optimistic concurrency via fingerprints
 - storage health and recovery diagnostics
+
+## Why This Matters
+
+Most AI products are strong at `task -> implement`.
+DeepPlan is intentionally focused on the layer before that.
+
+The value thesis is:
+
+- `Plan` is where strategic value and monetization leverage live
+- generic execution layers are increasingly commoditized
+- future advantage comes from better plans, not just faster output
 
 ## Core Concepts
 
