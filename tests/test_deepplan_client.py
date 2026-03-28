@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 import deepplan
-from deepplan_client import DeepPlanClient, DeepPlanClientError, DeepPlanClientOperationError, DeepPlanConflictError
+from deepplan_client import DeepPlanClient, DeepPlanClientError, DeepPlanClientOperationError, DeepPlanConflictError, DeepPlanHealthGateError
 from deepplan_server import DeepPlanHandler
 
 
@@ -403,6 +403,45 @@ class DeepPlanClientTests(unittest.TestCase):
         self.assertTrue(result["retried"])
         self.assertEqual(result["operation"], "add_evidence")
         self.assertEqual(result["post_cycle"]["plan"]["evidence"][-1]["claim"], "Opt-in retry evidence")
+
+    def test_apply_and_get_cycle_can_block_on_degraded_health(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            deepplan.EVENTS_PATH.write_text('{"type":"ok"}\nnot-json\n', encoding="utf-8")
+            client = DeepPlanClient(transport=handler_transport)
+            with self.assertRaises(DeepPlanHealthGateError) as ctx:
+                client.apply_and_get_cycle(
+                    "update_plan",
+                    {
+                        "goal": "blocked by health",
+                        "success_metric": "Reach 2 pilots",
+                        "deadline": "2026-04-03",
+                    },
+                    require_healthy=True,
+                )
+            plan = deepplan.load_plan()
+
+        self.assertEqual(ctx.exception.operation, "update_plan")
+        self.assertEqual(ctx.exception.step, "preflight")
+        self.assertEqual(ctx.exception.status, "degraded")
+        self.assertEqual(plan["goal"], "")
+
+    def test_apply_and_get_cycle_allows_write_when_health_gate_disabled(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            deepplan.EVENTS_PATH.write_text('{"type":"ok"}\nnot-json\n', encoding="utf-8")
+            client = DeepPlanClient(transport=handler_transport)
+            result = client.apply_and_get_cycle(
+                "update_plan",
+                {
+                    "goal": "allowed on degraded health",
+                    "success_metric": "Reach 2 pilots",
+                    "deadline": "2026-04-03",
+                },
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["post_cycle"]["plan"]["goal"], "allowed on degraded health")
 
 
 if __name__ == "__main__":

@@ -58,6 +58,16 @@ class DeepPlanClientOperationError(RuntimeError):
         self.headers = cause.headers
 
 
+class DeepPlanHealthGateError(RuntimeError):
+    def __init__(self, operation: str, step: str, health: Dict[str, Any]) -> None:
+        status = str(health.get("status", "")).strip() or "unknown"
+        super().__init__(f"{operation} blocked by storage health during {step}: {status}")
+        self.operation = operation
+        self.step = step
+        self.health = health
+        self.status = status
+
+
 RequestTransport = Callable[[str, str, Optional[Dict[str, Any]], Optional[Dict[str, str]]], Tuple[int, Dict[str, Any], Dict[str, str]]]
 
 
@@ -157,6 +167,12 @@ class DeepPlanClient:
             "post_cycle": after,
         }
 
+    def _enforce_write_health(self, operation: str, cycle: Dict[str, Any], step: str) -> None:
+        health = cycle.get("health", {})
+        status = str(health.get("status", "")).strip()
+        if status and status != "ok":
+            raise DeepPlanHealthGateError(operation, step, health)
+
     def get_plan(self) -> Dict[str, Any]:
         return self.request("GET", "/plan")
 
@@ -212,6 +228,7 @@ class DeepPlanClient:
         *,
         history_limit: int = 10,
         expected_fingerprint: str = "",
+        require_healthy: bool = False,
     ) -> Dict[str, Any]:
         def restore_mutation(input_payload: Dict[str, Any], *, expected_fingerprint: str = "") -> Dict[str, Any]:
             return self.restore_revision(
@@ -229,6 +246,8 @@ class DeepPlanClient:
         if operation not in mutation_map:
             raise ValueError(f"unsupported operation: {operation}")
         before = self.get_cycle(history_limit=history_limit)
+        if require_healthy:
+            self._enforce_write_health(operation, before, "preflight")
         try:
             mutation_result = mutation_map[operation](payload, expected_fingerprint=expected_fingerprint)
         except DeepPlanConflictError as exc:
@@ -255,6 +274,7 @@ class DeepPlanClient:
         history_limit: int = 10,
         expected_fingerprint: str = "",
         allow_non_idempotent_retry: bool = False,
+        require_healthy: bool = False,
     ) -> Dict[str, Any]:
         attempt = 1
         try:
@@ -263,6 +283,7 @@ class DeepPlanClient:
                 payload,
                 history_limit=history_limit,
                 expected_fingerprint=expected_fingerprint,
+                require_healthy=require_healthy,
             )
             result["retried"] = False
             result["attempts"] = attempt
@@ -273,6 +294,8 @@ class DeepPlanClient:
             if operation not in {"update_plan", "restore_revision"} and not allow_non_idempotent_retry:
                 raise
             refreshed = self.get_cycle(history_limit=history_limit)
+            if require_healthy:
+                self._enforce_write_health(operation, refreshed, "retry_preflight")
             attempt += 1
             retry_fingerprint = str(refreshed.get("fingerprint", "")).strip() or exc.current_fingerprint
             result = self.apply_and_get_cycle(
@@ -280,6 +303,7 @@ class DeepPlanClient:
                 payload,
                 history_limit=history_limit,
                 expected_fingerprint=retry_fingerprint,
+                require_healthy=False,
             )
             result["retried"] = True
             result["attempts"] = attempt
