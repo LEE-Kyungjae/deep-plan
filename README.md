@@ -315,6 +315,11 @@ Use the client when another repo needs DeepPlan as a planning kernel without re-
 - restore preview / restore flows
 - optional health-gated writes
 
+See also:
+
+- `docs/integration-agentscope.md`
+- `examples/deepplan_kernel_adapter.py`
+
 ## Product Thesis
 
 In the AI era, execution is increasingly commoditized.
