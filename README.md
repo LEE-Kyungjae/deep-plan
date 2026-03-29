@@ -381,7 +381,9 @@ Use the client when another repo needs DeepPlan as a planning kernel without re-
 See also:
 
 - `docs/integration-agentscope.md`
+- `docs/deepplan-agents-bootstrap.md`
 - `examples/deepplan_kernel_adapter.py`
+- `examples/deepplan_planner_host.py`
 - `deepplan_client.py` remains as a compatibility import path
 
 Install the SDK surface locally from this repo:
