@@ -4,6 +4,7 @@
   "title": "DeepPlan",
   "type": "object",
   "required": [
+    "schema_version",
     "version",
     "updated_at",
     "goal",
@@ -37,6 +38,9 @@
     "reference_discoveries"
   ],
   "properties": {
+    "schema_version": {
+      "type": "string"
+    },
     "version": {
       "type": "string"
     },

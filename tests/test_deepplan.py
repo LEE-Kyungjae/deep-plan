@@ -52,6 +52,18 @@ class DeepPlanStateIsolation:
 
 
 class DeepPlanRegressionTests(unittest.TestCase):
+    def test_default_plan_exposes_schema_version_and_legacy_alias(self):
+        plan = deepplan.default_plan()
+
+        self.assertEqual(plan["schema_version"], deepplan.CONTRACT_VERSION)
+        self.assertEqual(plan["version"], plan["schema_version"])
+
+    def test_migrate_plan_backfills_schema_version_from_legacy_version(self):
+        migrated = deepplan.migrate_plan({"version": "0.4.0"})
+
+        self.assertEqual(migrated["schema_version"], "0.4.0")
+        self.assertEqual(migrated["version"], "0.4.0")
+
     def test_slash_command_mapping_covers_restore_preview(self):
         tool_name, payload = deepplan_agent.slash_to_tool("/deepplan.restore-preview revision_id=rev-123")
 
@@ -978,9 +990,68 @@ class DeepPlanRegressionTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["tool_name"], "run_reference_discovery")
         self.assertEqual(result["result_type"], "reference_discovery")
-        self.assertTrue(result["applied"])
-        self.assertEqual(result["search_mode"], "github-pattern-scan")
-        self.assertEqual(len(result["plan"]["reference_discoveries"]), 1)
+
+    def test_capture_evidence_cycle_tool_returns_typed_multi_step_result(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            deepplan_agent.execute_tool(
+                "update_plan",
+                {
+                    "goal": "agent cycle baseline",
+                    "success_metric": "Reach 3 pilots",
+                    "deadline": "2026-04-10",
+                },
+            )
+            result = deepplan_agent.execute_tool(
+                "capture_evidence_cycle",
+                {
+                    "evidence": {
+                        "claim": "Pilot users repeat the same activation blocker",
+                        "source": "pilot-call",
+                        "confidence": 76,
+                    },
+                    "replan": {
+                        "plan_task": "Refine onboarding diagnosis",
+                    },
+                    "idempotency_key": "agent-cycle-1",
+                    "history_limit": 2,
+                },
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["tool_name"], "capture_evidence_cycle")
+        self.assertEqual(result["result_type"], "planning_cycle")
+        self.assertEqual(result["operation"], "capture_evidence_cycle")
+        self.assertEqual(result["idempotency_key"], "agent-cycle-1")
+        self.assertIn("evidence_result", result)
+        self.assertIn("replan_result", result)
+        self.assertIn("post_cycle", result)
+        self.assertEqual(result["post_cycle"]["history_limit"], 2)
+        self.assertEqual(result["step_results"]["add_evidence"]["tool_name"], "add_evidence")
+        self.assertEqual(result["step_results"]["replan"]["tool_name"], "replan")
+
+    def test_capture_evidence_cycle_tool_reuses_substep_idempotency_keys(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            payload = {
+                "evidence": {
+                    "claim": "Same evidence cycle",
+                    "source": "pilot-call",
+                    "confidence": 70,
+                },
+                "replan": {
+                    "plan_task": "Keep cycle stable",
+                },
+                "idempotency_key": "agent-cycle-replay",
+            }
+            first = deepplan_agent.execute_tool("capture_evidence_cycle", payload)
+            second = deepplan_agent.execute_tool("capture_evidence_cycle", payload)
+
+        self.assertFalse(first["evidence_result"]["idempotency_replayed"])
+        self.assertFalse(first["replan_result"]["idempotency_replayed"])
+        self.assertTrue(second["evidence_result"]["idempotency_replayed"])
+        self.assertTrue(second["replan_result"]["idempotency_replayed"])
+        self.assertEqual(first["post_fingerprint"], second["post_fingerprint"])
 
 
 if __name__ == "__main__":

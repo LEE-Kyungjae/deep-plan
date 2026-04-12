@@ -21,6 +21,8 @@ REVISIONS_PATH = STATE_DIR / "revisions.jsonl"
 EVENT_RETENTION_LIMIT = 1000
 REVISION_RETENTION_LIMIT = 100
 STATE_LOCK = None
+IMPLEMENTATION_VERSION = "0.5.0"
+CONTRACT_VERSION = "0.5.0"
 
 
 def now_iso() -> str:
@@ -34,7 +36,8 @@ def ensure_state() -> None:
 
 def default_plan() -> Dict:
     return {
-        "version": "0.5.0",
+        "schema_version": CONTRACT_VERSION,
+        "version": CONTRACT_VERSION,
         "updated_at": now_iso(),
         "goal": "",
         "success_metric": "",
@@ -76,8 +79,16 @@ def migrate_plan(plan: Dict) -> Dict:
         plan["execution_tasks"] = tasks[split:]
     plan.pop("tasks", None)
 
+    schema_version = str(plan.get("schema_version", "")).strip()
+    legacy_version = str(plan.get("version", "")).strip()
+    if not schema_version:
+        schema_version = legacy_version or CONTRACT_VERSION
+    plan["schema_version"] = schema_version
+    plan["version"] = schema_version
+
     for key, default in [
-        ("version", "0.5.0"),
+        ("schema_version", CONTRACT_VERSION),
+        ("version", CONTRACT_VERSION),
         ("updated_at", now_iso()),
         ("goal", ""),
         ("success_metric", ""),
@@ -111,7 +122,8 @@ def migrate_plan(plan: Dict) -> Dict:
     ]:
         plan.setdefault(key, default)
 
-    plan["version"] = "0.5.0"
+    plan["schema_version"] = str(plan.get("schema_version", "")).strip() or CONTRACT_VERSION
+    plan["version"] = plan["schema_version"]
     return plan
 
 
@@ -256,6 +268,7 @@ def build_plan_schema() -> Dict:
         "type": "object",
         "required": list(default_plan().keys()),
         "properties": {
+            "schema_version": {"type": "string"},
             "version": {"type": "string"},
             "updated_at": {"type": "string"},
             "goal": {"type": "string"},
@@ -440,6 +453,7 @@ def revision_metadata(plan: Dict) -> Dict:
     qa = qa_report(plan)
     summary = plan_summary(plan)
     return {
+        "schema_version": str(plan.get("schema_version", "")).strip(),
         "goal": str(plan.get("goal", "")).strip(),
         "updated_at": str(plan.get("updated_at", "")).strip(),
         "qa_result": qa["result"],
@@ -496,6 +510,8 @@ def plan_response(plan: Dict) -> Dict:
         "summary": plan_summary(plan),
         "validation": validate_plan_shape(plan),
         "fingerprint": plan_fingerprint(plan),
+        "contract_version": str(plan.get("schema_version", "")).strip() or CONTRACT_VERSION,
+        "implementation_version": IMPLEMENTATION_VERSION,
     }
 
 
@@ -509,6 +525,8 @@ def cycle_snapshot(history_limit: int = 10) -> Dict:
         "summary": plan_result["summary"],
         "validation": plan_result["validation"],
         "fingerprint": plan_result["fingerprint"],
+        "contract_version": plan_result["contract_version"],
+        "implementation_version": plan_result["implementation_version"],
         "qa": qa_report(plan),
         "health": storage_health_report(),
         "history": list_revisions(limit=history_limit),
@@ -1479,6 +1497,7 @@ def plan_summary(plan: Dict) -> Dict:
     recent_auto_replan = last_auto_replan_event(plan)
     health = storage_health_report()
     return {
+        "schema_version": plan.get("schema_version"),
         "goal": plan.get("goal"),
         "success_metric": plan.get("success_metric"),
         "deadline": plan.get("deadline"),
