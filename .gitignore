@@ -1,3 +1,5 @@
 .deeplan/
 __pycache__/
 external_repos/
+.DS_Store
+.pytest_cache/

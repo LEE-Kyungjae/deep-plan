@@ -27,6 +27,63 @@ It keeps planning state in your repo with:
 
 It is intentionally `plan-only`. DeepPlan does not run tasks, schedule workflows, or own delivery.
 
+## Architecture
+
+DeepPlan is organized around one planning kernel with a few integration surfaces around it.
+
+```text
+deepplan/
+├── deepplan.py                    # Core planning kernel and CLI
+├── deepplan_server.py             # Local HTTP transport
+├── deepplan_sdk/                  # Packaged Python client surface
+├── deepplan_reference_adapter.py  # Canonical Python reference adapter
+├── deepplan_reference_host.py     # Canonical Python reference host
+├── deepplan_reference_consumer.ts # Thin TypeScript HTTP consumer
+├── spec/                          # Public contract entrypoints
+└── tests/contracts/               # Fixture-backed conformance cases
+```
+
+Separation of concerns:
+
+| Layer | Responsibility |
+| --- | --- |
+| `core` | Persisted plan state, evidence, hypothesis log, revision history, QA, conflict and restore semantics |
+| `transport` | CLI, HTTP, and agent wrapper access to the same planning kernel |
+| `reference` | Python host/adapter and TypeScript consumer for real integration examples |
+| `conformance` | Contract fixtures and runners that verify stable adopter-facing behavior |
+
+The important design choice is that the plan is the source of truth. Everything else exists to read it, mutate it safely, or verify that another implementation behaves the same way.
+
+## Planning Flow
+
+DeepPlan is easiest to understand as one stateful loop:
+
+```text
+choose direction
+    ↓
+write plan state
+    ↓
+add evidence and hypotheses
+    ↓
+review plan quality
+    ↓
+replan or restore when the evidence changes
+```
+
+In transport terms, the same loop looks like this:
+
+```text
+client/tool writes plan
+    ↓
+fingerprint guard checks stale writes
+    ↓
+plan revision is recorded
+    ↓
+QA and health surfaces stay inspectable
+    ↓
+history / restore / conformance stay available to other consumers
+```
+
 ## Why Use It
 
 DeepPlan is for the layer before execution:
@@ -48,6 +105,29 @@ That does not solve the harder problem:
 - keeping product and business intent coherent over time
 
 DeepPlan exists to reduce that failure mode.
+
+## Product Boundary
+
+DeepPlan is `plan-only` by design.
+
+DeepPlan should own:
+
+- idea discovery
+- direction setting
+- planning logic
+- success and failure criteria
+- evidence-backed replanning
+- revision-aware recovery
+
+DeepPlan should not own:
+
+- task execution orchestration
+- delivery automation
+- general agent runtime concerns
+- workflow scheduling
+- channel or chat surfaces
+
+Those layers can be built around DeepPlan, but they should not blur the purpose of this repo.
 
 ## What Makes It Different
 
@@ -74,17 +154,25 @@ Everything else exists to improve plan quality over time:
 - `revisions` show how the plan changed
 - `restore` lets you safely recover a better prior direction
 
-## Core Loop
+## Access Surfaces
 
-DeepPlan should be easy to remember as one loop:
+DeepPlan currently ships four access surfaces around the same planning core:
 
-1. `ideate`: generate candidate directions
-2. `plan`: choose one direction and define success/failure criteria
-3. `evidence`: add signals that support or weaken the plan
-4. `review`: inspect plan quality and next questions
-5. `replan`: change direction when the evidence says to
+| Surface | Purpose |
+| --- | --- |
+| CLI | Local-first planning workflows in the repo |
+| HTTP service | Local integration for editors, sidecars, and non-Python consumers |
+| Agent wrapper | Slash-command and natural-language planning control |
+| Python client | Typed integration with conflict/retry handling |
 
-If planning is weak, faster execution only accelerates the wrong path.
+The core guarantees across these surfaces are:
+
+- a consistent plan schema
+- explicit contract and implementation versions
+- revision history and safe restore preview
+- stale-write protection with fingerprints
+- storage health and recovery diagnostics
+- fixture-backed conformance checks for stable public behavior
 
 ## Example Outcome
 
@@ -105,29 +193,6 @@ After one DeepPlan loop, the output should be sharper:
 
 That is the job: force a better direction decision before more building happens.
 
-## Product Boundary
-
-DeepPlan is `plan-only` by design.
-
-DeepPlan should own:
-
-- idea discovery
-- direction setting
-- planning logic
-- success and failure criteria
-- evidence-backed replanning
-- revision-aware recovery
-
-DeepPlan should not own:
-
-- task execution orchestration
-- delivery automation
-- general agent runtime concerns
-- workflow scheduling
-- channel or chat surfaces
-
-Those layers can be built around DeepPlan, but they should not blur the purpose of this repo.
-
 ## Who It Is For
 
 DeepPlan is strongest for:
@@ -142,24 +207,6 @@ It is a weaker fit for:
 - teams that mainly need task tracking
 - execution-heavy automation pipelines
 - organizations already centered on a rigid PM stack
-
-## What You Get
-
-DeepPlan now has four access layers around the same planning core:
-
-- CLI: direct local planning workflows
-- HTTP service: local integration for editors and sidecars
-- Agent wrapper: slash-command and natural-language control
-- Python client: typed integration for external repos
-
-The core guarantees are:
-
-- a consistent plan schema
-- an explicit contract version in plan state
-- QA and validation on plan changes
-- revision history and safe restore preview
-- stale-write protection with fingerprints
-- storage health and recovery diagnostics
 
 ## Core Concepts
 
@@ -219,6 +266,17 @@ DeepPlan now separates implementation release cadence from the persisted plannin
 - fixture-backed contract tests live in `tests/contracts/`
 - aggregated contract/readiness surfaces are available at `GET /contracts` and `GET /doctor`
 - the conformance runner is available through `python3 deepplan.py conformance`
+
+Current stability boundary:
+
+| Surface | Status |
+| --- | --- |
+| persisted plan state | stable |
+| fingerprint conflict and restore semantics | stable |
+| documented HTTP envelopes | stable |
+| fixture-backed conformance cases | stable |
+| host action contract | experimental |
+| reference adapters and example integrations | experimental |
 
 ## Quick Start
 
