@@ -1,19 +1,25 @@
 # DeepPlan Agents Bootstrap
 
-This document is for the separate repo that will orchestrate DeepPlan inside a multi-agent runtime.
+This document is for the separate repo that will orchestrate agents around DeepPlan.
 
 The goal is not to move DeepPlan logic into that repo.
-The goal is to build around DeepPlan while keeping planning state authoritative in one place.
+The goal is to build around DeepPlan while keeping the current plan, evidence, and revision history authoritative in one place.
 
 ## Repo Thesis
 
 Recommended split:
 
-- `deep-plan`: planning kernel, QA, revisions, restore, planning memory
+- `deep-plan`: planning state, QA, revisions, restore, planning memory
 - `deepplan-agents`: orchestration, agent roles, runtime coordination, host-side event model
 
 DeepPlan should remain `plan-only`.
 The integration repo should own execution orchestration.
+
+In practice:
+
+- DeepPlan decides plan state
+- the host repo decides execution flow
+- agents contribute evidence, review, and proposed plan changes
 
 ## Suggested Repo Shape
 
@@ -54,6 +60,8 @@ from deepplan_sdk import DeepPlanClient
 
 The host runtime should not mutate DeepPlan state ad hoc.
 All writes should go through one adapter layer.
+
+That keeps one decision loop intact even when multiple agents are involved.
 
 ## First Adapter Responsibilities
 
@@ -109,7 +117,7 @@ Phase 3:
 - optional execution-facing host agent
 
 Do not start with too many agents.
-The first integration should prove that planning state stays coherent under repeated writes.
+The first integration should prove that planning state stays coherent under repeated writes and repeated replans.
 
 ## Decision Policy
 
@@ -155,3 +163,4 @@ The first integration repo should not try to solve:
 - full operator dashboard
 
 Keep the first repo small enough to prove the kernel boundary, not to build the whole company OS in one step.
+Keep the first repo small enough to prove the planning boundary.

@@ -1,14 +1,27 @@
 #!/usr/bin/env python3
 import io
+import importlib.util
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 import deepplan
+from deepplan_host_contract import host_action_contract, required_capabilities_for_action, role_has_action_capabilities
 from deepplan_sdk import DeepPlanClient as PackagedDeepPlanClient
 from deepplan_client import DeepPlanClient, DeepPlanClientError, DeepPlanClientOperationError, DeepPlanConflictError, DeepPlanHealthGateError
 from deepplan_server import DeepPlanHandler
+
+
+EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "examples"
+if str(EXAMPLES_DIR) not in sys.path:
+    sys.path.insert(0, str(EXAMPLES_DIR))
+_PLANNER_HOST_SPEC = importlib.util.spec_from_file_location("deepplan_planner_host_example", EXAMPLES_DIR / "deepplan_planner_host.py")
+assert _PLANNER_HOST_SPEC and _PLANNER_HOST_SPEC.loader
+_PLANNER_HOST_MODULE = importlib.util.module_from_spec(_PLANNER_HOST_SPEC)
+_PLANNER_HOST_SPEC.loader.exec_module(_PLANNER_HOST_MODULE)
+PlannerHostStep = _PLANNER_HOST_MODULE.PlannerHostStep
 
 
 class DeepPlanStateIsolation:
@@ -114,6 +127,59 @@ class DeepPlanClientTests(unittest.TestCase):
         self.assertEqual(result["history_limit"], 1)
         self.assertEqual(len(result["history"]), 1)
         self.assertEqual(client.tracked_fingerprint, deepplan.plan_fingerprint(seed))
+
+    def test_get_host_action_contract_returns_shared_contract(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            client = DeepPlanClient(transport=handler_transport)
+            result = client.get_host_action_contract(role="researcher")
+
+        self.assertEqual(result["role"], "researcher")
+        self.assertEqual(result["profile"], "researcher_capture")
+        self.assertEqual(result["allowed_actions"], host_action_contract("researcher")["allowed_actions"])
+        self.assertEqual(result["capabilities"], host_action_contract("researcher")["capabilities"])
+        self.assertEqual(result["actions"], host_action_contract("researcher")["actions"])
+        self.assertIn("contract_path", result)
+        action_map = {item["action"]: item for item in result["actions"]}
+        self.assertEqual(action_map["capture_evidence_cycle"]["required_capabilities"], ["evidence.append_and_replan"])
+
+    def test_host_contract_capability_helpers_reflect_role_permissions(self):
+        self.assertEqual(required_capabilities_for_action("planner", "update_plan"), ["plan.write"])
+        self.assertTrue(role_has_action_capabilities("planner", "update_plan"))
+        self.assertFalse(role_has_action_capabilities("reviewer", "update_plan"))
+        self.assertTrue(role_has_action_capabilities("reviewer", "preview_restore_previous"))
+
+    def test_get_contracts_returns_catalog(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            client = DeepPlanClient(transport=handler_transport)
+            result = client.get_contracts()
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["result_type"], "contracts")
+        self.assertEqual(result["contract_version"], deepplan.CONTRACT_VERSION)
+        self.assertIn("stability_levels", result)
+        self.assertIn("summary", result)
+        self.assertGreaterEqual(result["summary"]["experimental_contract_count"], 1)
+        self.assertIn("http_api", result["contracts"])
+        self.assertIn("profile_summary", result["contracts"]["host_action_contract"])
+        self.assertIn("conformance_manifest", result["contracts"])
+
+    def test_get_doctor_returns_readiness_report(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            client = DeepPlanClient(transport=handler_transport)
+            result = client.get_doctor()
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["contract_version"], deepplan.CONTRACT_VERSION)
+        self.assertIn("checks", result)
+        self.assertIn("check_summary", result)
+        self.assertEqual(result["check_summary"]["fail"], 0)
+        self.assertGreaterEqual(result["check_summary"]["warn"], 1)
+        self.assertIn("schema_drift", result)
+        self.assertIn("tool_schema", result)
+        self.assertIn("host_action_contract", result)
 
     def test_update_plan_uses_tracked_fingerprint(self):
         with DeepPlanStateIsolation():
@@ -291,6 +357,8 @@ class DeepPlanClientTests(unittest.TestCase):
         self.assertEqual(ctx.exception.step, "mutation")
         self.assertEqual(ctx.exception.status, 400)
         self.assertEqual(ctx.exception.payload["error"], "claim is required")
+        self.assertEqual(ctx.exception.payload["error_code"], "invalid_request")
+        self.assertFalse(ctx.exception.cause.retryable)
 
     def test_stale_fingerprint_raises_typed_conflict_error(self):
         with DeepPlanStateIsolation():
@@ -309,6 +377,7 @@ class DeepPlanClientTests(unittest.TestCase):
 
         self.assertEqual(ctx.exception.status, 412)
         self.assertEqual(ctx.exception.payload["error"], "plan fingerprint mismatch")
+        self.assertEqual(ctx.exception.error_code, "plan_fingerprint_mismatch")
         self.assertEqual(ctx.exception.expected_fingerprint, first["fingerprint"])
         self.assertTrue(ctx.exception.current_fingerprint)
         self.assertTrue(ctx.exception.can_refresh)
@@ -335,6 +404,7 @@ class DeepPlanClientTests(unittest.TestCase):
         self.assertEqual(ctx.exception.operation, "update_plan")
         self.assertEqual(ctx.exception.step, "mutation")
         self.assertEqual(ctx.exception.status, 412)
+        self.assertEqual(ctx.exception.error_code, "plan_fingerprint_mismatch")
         self.assertEqual(ctx.exception.expected_fingerprint, initial["fingerprint"])
         self.assertTrue(ctx.exception.current_fingerprint)
 
@@ -538,6 +608,296 @@ class DeepPlanClientTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["post_cycle"]["plan"]["goal"], "allowed on degraded health")
+
+    def test_capture_evidence_cycle_with_retry_recovers_multi_agent_conflict(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            writer = DeepPlanClient(transport=handler_transport)
+            stale_actor = DeepPlanClient(transport=handler_transport)
+            initial = stale_actor.update_plan(
+                {
+                    "goal": "multi-agent cycle baseline",
+                    "success_metric": "Reach 2 pilots",
+                    "deadline": "2026-04-03",
+                }
+            )
+            writer.update_plan({"review_cadence": "weekly"})
+            result = stale_actor.capture_evidence_cycle(
+                {
+                    "claim": "Shared customer blocker",
+                    "source": "pilot-call",
+                    "confidence": 75,
+                },
+                replan_payload={"plan_task": "Revisit onboarding path"},
+                expected_fingerprint=initial["fingerprint"],
+                allow_retry=True,
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["retried"])
+        self.assertEqual(result["attempts"], 2)
+        self.assertEqual(result["retry_from_fingerprint"], initial["fingerprint"])
+        self.assertTrue(result["retry_to_fingerprint"])
+        self.assertEqual(result["post_cycle"]["plan"]["evidence"][-1]["claim"], "Shared customer blocker")
+        self.assertEqual(result["post_cycle"]["plan"]["plan_tasks"][-1], "Revisit onboarding path")
+        self.assertEqual(stale_actor.tracked_fingerprint, result["post_fingerprint"])
+
+    def test_planner_host_exposes_action_contract(self):
+        host = PlannerHostStep(adapter=None)  # type: ignore[arg-type]
+
+        contract = host.action_contract()
+
+        self.assertEqual(contract["version"], "v1")
+        self.assertEqual(contract["role"], "planner")
+        self.assertEqual(contract["profile"], "planner_full")
+        self.assertIn("input_schema", contract)
+        self.assertIn("allowed_actions", contract)
+        self.assertIn("capabilities", contract)
+        action_names = [item["action"] for item in contract["actions"]]
+        self.assertIn("update_plan", action_names)
+        self.assertIn("capture_evidence_cycle", action_names)
+        self.assertIn("restore_previous", action_names)
+        self.assertIn("update_plan", contract["allowed_actions"])
+        self.assertIn("plan.write", contract["capabilities"])
+
+    def test_planner_host_update_plan_action_can_retry_stale_conflict(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            client_a = DeepPlanClient(transport=handler_transport)
+            client_b = DeepPlanClient(transport=handler_transport)
+            host = PlannerHostStep(adapter=_PLANNER_HOST_MODULE.DeepPlanKernelAdapter(client_b))
+            initial = client_a.get_plan()
+            client_a.update_plan(
+                {
+                    "goal": "fresh host baseline",
+                    "success_metric": "Reach 2 pilots",
+                    "deadline": "2026-04-03",
+                }
+            )
+            event = host.run(
+                {
+                    "action": "update_plan",
+                    "payload": {"goal": "host recovered update"},
+                    "options": {
+                        "expected_fingerprint": initial["fingerprint"],
+                        "allow_retry": True,
+                        "history_limit": 1,
+                    },
+                }
+            )
+
+        self.assertEqual(event["type"], "plan_update_applied")
+        self.assertEqual(event["action"], "update_plan")
+        self.assertTrue(event["result"]["retried"])
+        self.assertEqual(event["result"]["post_cycle"]["plan"]["goal"], "host recovered update")
+        self.assertEqual(event["summary"]["retried"], True)
+
+    def test_planner_host_capture_evidence_cycle_can_retry_stale_conflict(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            writer = DeepPlanClient(transport=handler_transport)
+            actor = DeepPlanClient(transport=handler_transport)
+            host = PlannerHostStep(adapter=_PLANNER_HOST_MODULE.DeepPlanKernelAdapter(actor))
+            initial = actor.update_plan(
+                {
+                    "goal": "host cycle baseline",
+                    "success_metric": "Reach 2 pilots",
+                    "deadline": "2026-04-03",
+                }
+            )
+            writer.update_plan({"review_cadence": "weekly"})
+            event = host.run(
+                {
+                    "action": "capture_evidence_cycle",
+                    "payload": {
+                        "evidence": {
+                            "claim": "Planner host recovered evidence",
+                            "source": "pilot-call",
+                            "confidence": 74,
+                        },
+                        "replan": {"plan_task": "Retune follow-up flow"},
+                    },
+                    "options": {
+                        "expected_fingerprint": initial["fingerprint"],
+                        "allow_retry": True,
+                        "history_limit": 1,
+                    },
+                }
+            )
+
+        self.assertEqual(event["type"], "evidence_cycle_applied")
+        self.assertEqual(event["action"], "capture_evidence_cycle")
+        self.assertTrue(event["result"]["retried"])
+        self.assertEqual(event["result"]["post_cycle"]["plan"]["evidence"][-1]["claim"], "Planner host recovered evidence")
+        self.assertEqual(event["result"]["post_cycle"]["plan"]["plan_tasks"][-1], "Retune follow-up flow")
+
+    def test_planner_host_run_event_returns_invalid_action_taxonomy(self):
+        host = PlannerHostStep(adapter=_PLANNER_HOST_MODULE.DeepPlanKernelAdapter(DeepPlanClient(transport=handler_transport)))
+
+        event = host.run_event({"action": "unknown_action"})
+
+        self.assertFalse(event["ok"])
+        self.assertEqual(event["type"], "invalid_action")
+        self.assertEqual(event["action"], "unknown_action")
+        self.assertEqual(event["error"]["type"], "invalid_action")
+        self.assertEqual(event["error"]["error_code"], "invalid_action")
+        self.assertFalse(event["error"]["retryable"])
+
+    def test_planner_host_run_event_returns_permission_denied_taxonomy(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            host = PlannerHostStep(
+                adapter=_PLANNER_HOST_MODULE.DeepPlanKernelAdapter(DeepPlanClient(transport=handler_transport)),
+                role="researcher",
+            )
+            event = host.run_event(
+                {
+                    "action": "restore_previous",
+                    "options": {"history_limit": 1},
+                }
+            )
+
+        self.assertFalse(event["ok"])
+        self.assertEqual(event["type"], "permission_denied")
+        self.assertEqual(event["action"], "restore_previous")
+        self.assertEqual(event["error"]["type"], "permission_denied")
+        self.assertEqual(event["error"]["error_code"], "permission_denied")
+        self.assertFalse(event["error"]["retryable"])
+        self.assertIn("needs plan.restore", event["error"]["message"])
+
+    def test_planner_host_run_event_returns_health_gate_taxonomy(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            deepplan.EVENTS_PATH.write_text('{"type":"ok"}\nnot-json\n', encoding="utf-8")
+            host = PlannerHostStep(adapter=_PLANNER_HOST_MODULE.DeepPlanKernelAdapter(DeepPlanClient(transport=handler_transport)))
+            event = host.run_event(
+                {
+                    "action": "update_plan",
+                    "payload": {
+                        "goal": "blocked host update",
+                        "success_metric": "Reach 2 pilots",
+                        "deadline": "2026-04-03",
+                    },
+                    "options": {"require_healthy": True},
+                }
+            )
+
+        self.assertFalse(event["ok"])
+        self.assertEqual(event["type"], "health_gate")
+        self.assertEqual(event["error"]["type"], "health_gate")
+        self.assertEqual(event["error"]["error_code"], "health_gate_blocked")
+        self.assertFalse(event["error"]["retryable"])
+        self.assertEqual(event["error"]["operation"], "update_plan")
+
+    def test_planner_host_run_event_returns_conflict_taxonomy(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            writer = DeepPlanClient(transport=handler_transport)
+            actor = DeepPlanClient(transport=handler_transport)
+            host = PlannerHostStep(adapter=_PLANNER_HOST_MODULE.DeepPlanKernelAdapter(actor))
+            initial = actor.update_plan(
+                {
+                    "goal": "host conflict baseline",
+                    "success_metric": "Reach 2 pilots",
+                    "deadline": "2026-04-03",
+                }
+            )
+            writer.update_plan({"review_cadence": "weekly"})
+            event = host.run_event(
+                {
+                    "action": "capture_evidence_cycle",
+                    "payload": {
+                        "evidence": {
+                            "claim": "stale host evidence",
+                            "source": "pilot-call",
+                            "confidence": 72,
+                        },
+                        "replan": {"plan_task": "stale host follow-up"},
+                    },
+                    "options": {"expected_fingerprint": initial["fingerprint"]},
+                }
+            )
+
+        self.assertFalse(event["ok"])
+        self.assertEqual(event["type"], "conflict")
+        self.assertEqual(event["error"]["type"], "conflict")
+        self.assertEqual(event["error"]["error_code"], "plan_fingerprint_mismatch")
+        self.assertTrue(event["error"]["retryable"])
+        self.assertEqual(event["error"]["operation"], "capture_evidence_cycle")
+        self.assertEqual(event["error"]["step"], "add_evidence")
+        self.assertEqual(event["error"]["expected_fingerprint"], initial["fingerprint"])
+        self.assertTrue(event["error"]["current_fingerprint"])
+
+    def test_planner_host_multi_role_sequence_preserves_shared_plan_state(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            planner = PlannerHostStep(adapter=_PLANNER_HOST_MODULE.DeepPlanKernelAdapter(DeepPlanClient(transport=handler_transport)), role="planner")
+            researcher = PlannerHostStep(adapter=_PLANNER_HOST_MODULE.DeepPlanKernelAdapter(DeepPlanClient(transport=handler_transport)), role="researcher")
+            reviewer = PlannerHostStep(adapter=_PLANNER_HOST_MODULE.DeepPlanKernelAdapter(DeepPlanClient(transport=handler_transport)), role="reviewer")
+
+            plan_event = planner.run_event(
+                {
+                    "action": "update_plan",
+                    "payload": {
+                        "goal": "Narrow onboarding bottleneck",
+                        "success_metric": "Reach 3 retained pilots",
+                        "deadline": "2026-04-30",
+                    },
+                }
+            )
+            evidence_event = researcher.run_event(
+                {
+                    "action": "capture_evidence_cycle",
+                    "payload": {
+                        "evidence": {
+                            "claim": "Pilot calls show the same activation blocker",
+                            "source": "pilot-call",
+                            "confidence": 78,
+                        },
+                        "replan": {
+                            "plan_task": "Test a tighter activation walkthrough",
+                        },
+                        "idempotency_key": "sequence-1",
+                    },
+                    "options": {
+                        "expected_fingerprint": plan_event["result"]["post_fingerprint"],
+                        "allow_retry": True,
+                        "history_limit": 2,
+                    },
+                }
+            )
+            preview_event = reviewer.run_event({"action": "preview_restore_previous"})
+
+        self.assertTrue(plan_event["ok"])
+        self.assertEqual(plan_event["type"], "plan_update_applied")
+        self.assertTrue(evidence_event["ok"])
+        self.assertEqual(evidence_event["type"], "evidence_cycle_applied")
+        self.assertEqual(evidence_event["result"]["post_cycle"]["plan"]["evidence"][-1]["claim"], "Pilot calls show the same activation blocker")
+        self.assertIn("Test a tighter activation walkthrough", evidence_event["result"]["post_cycle"]["plan"]["plan_tasks"])
+        self.assertTrue(preview_event["ok"])
+        self.assertEqual(preview_event["type"], "restore_preview")
+        self.assertIn("changed_fields", preview_event["preview"])
+
+    def test_reviewer_role_cannot_update_plan(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            reviewer = PlannerHostStep(
+                adapter=_PLANNER_HOST_MODULE.DeepPlanKernelAdapter(DeepPlanClient(transport=handler_transport)),
+                role="reviewer",
+            )
+            event = reviewer.run_event(
+                {
+                    "action": "update_plan",
+                    "payload": {
+                        "goal": "reviewer should not write plan",
+                    },
+                }
+            )
+
+        self.assertFalse(event["ok"])
+        self.assertEqual(event["type"], "permission_denied")
+        self.assertEqual(event["error"]["type"], "permission_denied")
+        self.assertIn("needs plan.write", event["error"]["message"])
 
 
 if __name__ == "__main__":

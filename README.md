@@ -1,22 +1,45 @@
 # DeepPlan
 
-DeepPlan is a local, agent-friendly planning kernel.
+DeepPlan is an experimental plan-state kernel for agentic workflows. It treats plans as structured, revisionable state rather than disposable text, so agents, tools, and humans can operate against the same planning surface over time. DeepPlan includes explicit conflict handling, restore flows, contract introspection, and fixture-backed conformance checks. It is currently alpha-stage and intended for early adopters exploring more reliable planning infrastructure across execution surfaces and runtimes.
 
-It is built for the layer before execution:
+## Current Status
+
+DeepPlan is ready for alpha release and early adopter use.
+
+- `core` contract surfaces such as persisted plan state, fingerprint conflict semantics, restore behavior, and documented HTTP envelopes are treated as stable according to `STABILITY.md`
+- `reference` surfaces such as host orchestration contracts, reference adapters, and example integrations are still experimental
+- the repository currently ships a canonical Python reference surface plus a thin TypeScript HTTP consumer
+
+Use it when:
+
+- you have ideas but do not know what to validate first
+- AI is helping you build fast, but direction keeps drifting
+- you need a clear reason to choose one path and kill others
+- you want evidence, failure criteria, and replanning history in one place
+
+It keeps planning state in your repo with:
+
+- one current plan
+- explicit evidence and hypotheses
+- revision history
+- restore points
+- a defined moment to replan
+
+It is intentionally `plan-only`. DeepPlan does not run tasks, schedule workflows, or own delivery.
+
+## Why Use It
+
+DeepPlan is for the layer before execution:
 
 - what to build
 - why now
-- what evidence supports the plan
+- what evidence supports it
 - what would invalidate it
 - when to replan
 
-DeepPlan is intentionally not an execution orchestrator. It is the planning and decision layer that other tools, agents, and runtimes can build on top of.
+In the AI era, execution is getting cheaper while direction is not.
 
-## Project Thesis
-
-DeepPlan exists because execution is getting cheaper while direction is not.
-
-In the AI era, more systems can generate code, content, tasks, and workflows.
+More systems can generate code, content, tasks, and workflows.
 That does not solve the harder problem:
 
 - choosing the right direction
@@ -24,19 +47,63 @@ That does not solve the harder problem:
 - finding better evidence before execution hardens the wrong path
 - keeping product and business intent coherent over time
 
-DeepPlan is built on one belief:
+DeepPlan exists to reduce that failure mode.
 
-`Plan is the product.`
+## What Makes It Different
 
-This repo should keep pressure on the planning layer itself:
+DeepPlan is not:
 
-- better goals
-- better hypotheses
-- better evidence
-- better failure detection
-- better replanning
+- a note-taking app
+- a generic project manager
+- a workflow orchestrator
+- an execution agent runtime
+- a loose PRD template
+
+DeepPlan is:
+
+- a structured decision state in your repo
+- an evidence-backed planning loop
+- a versioned history of why the plan changed
+- a safe replan and restore system for direction changes
+
+The core unit is the current `plan`.
+Everything else exists to improve plan quality over time:
+
+- `evidence` tests whether the plan is grounded
+- `hypothesis_log` tracks bets and outcomes
+- `revisions` show how the plan changed
+- `restore` lets you safely recover a better prior direction
+
+## Core Loop
+
+DeepPlan should be easy to remember as one loop:
+
+1. `ideate`: generate candidate directions
+2. `plan`: choose one direction and define success/failure criteria
+3. `evidence`: add signals that support or weaken the plan
+4. `review`: inspect plan quality and next questions
+5. `replan`: change direction when the evidence says to
 
 If planning is weak, faster execution only accelerates the wrong path.
+
+## Example Outcome
+
+You start with three possible directions:
+
+- AI planning tool for founders
+- agent workflow layer for developers
+- local research memory for solo builders
+
+After one DeepPlan loop, the output should be sharper:
+
+- chosen direction: AI planning tool for founders
+- rejected directions: workflow layer is crowded, research memory is less urgent
+- success metric: 5 founder users complete one weekly planning review
+- failure signal: users keep asking for task execution instead of planning help
+- next evidence to collect: 10 founder interviews, 3 weekly usage check-ins
+- replan point: revisit direction after 14 days or after 5 interviews contradict the core pain
+
+That is the job: force a better direction decision before more building happens.
 
 ## Product Boundary
 
@@ -61,33 +128,38 @@ DeepPlan should not own:
 
 Those layers can be built around DeepPlan, but they should not blur the purpose of this repo.
 
-## What DeepPlan Is
+## Who It Is For
+
+DeepPlan is strongest for:
+
+- solo builders working with AI
+- early-stage founders
+- developers in 0->1 exploration
+- small teams running many direction changes and experiments
+
+It is a weaker fit for:
+
+- teams that mainly need task tracking
+- execution-heavy automation pipelines
+- organizations already centered on a rigid PM stack
+
+## What You Get
 
 DeepPlan now has four access layers around the same planning core:
 
 - CLI: direct local planning workflows
-- HTTP service: local integration surface
-- Agent wrapper: slash-command and tool-style control
-- Python client: typed integration contract for external repos
+- HTTP service: local integration for editors and sidecars
+- Agent wrapper: slash-command and natural-language control
+- Python client: typed integration for external repos
 
 The core guarantees are:
 
-- schema-backed plan shape
-- QA and validation on core mutations
-- revision snapshots and safe restore preview
-- optimistic concurrency via fingerprints
+- a consistent plan schema
+- an explicit contract version in plan state
+- QA and validation on plan changes
+- revision history and safe restore preview
+- stale-write protection with fingerprints
 - storage health and recovery diagnostics
-
-## Why This Matters
-
-Most AI products are strong at `task -> implement`.
-DeepPlan is intentionally focused on the layer before that.
-
-The value thesis is:
-
-- `Plan` is where strategic value and monetization leverage live
-- generic execution layers are increasingly commoditized
-- future advantage comes from better plans, not just faster output
 
 ## Core Concepts
 
@@ -126,55 +198,79 @@ DeepPlan stores repo-local state in `.deeplan/`:
 - `decisions.jsonl`: decision log
 - `risks.jsonl`: risk log
 - `events.jsonl`: operational events
-- `revisions.jsonl`: revision snapshots
+- `revisions.jsonl`: plan revision history
 
 The runtime also tracks:
 
-- `fingerprint`: optimistic concurrency token for the current plan
+- `schema_version`: canonical contract version for persisted plan state
+- `version`: compatibility alias for older consumers of the same contract version
+- `fingerprint`: stale-write protection token for the current plan
 - revision history for restore and audit
 - storage health, recovery candidates, and retention windows
 
-## Interface Guide
+## Contract Surface
 
-Use the interface that matches the job:
+DeepPlan now separates implementation release cadence from the persisted planning contract.
 
-- CLI: manual planning, local iteration, shell workflows
-- HTTP: editor tools, sidecars, external local services
-- Agent wrapper: slash commands and natural-language tool routing
-- Python client: typed integration from another repo
+- `plan.schema_version` is the canonical contract version for persisted state
+- `plan.version` is kept as a compatibility alias during the transition
+- contract policy lives in `STABILITY.md` and `CONTRACT_VERSIONING.md`
+- normative contract docs live in `spec/`
+- fixture-backed contract tests live in `tests/contracts/`
+- aggregated contract/readiness surfaces are available at `GET /contracts` and `GET /doctor`
+- the conformance runner is available through `python3 deepplan.py conformance`
 
 ## Quick Start
 
+The first 5 to 10 minutes should produce:
+
+1. one chosen direction
+2. weak directions you did not choose
+3. a testable plan with metric, deadline, and review cadence
+4. evidence and hypotheses that can change the plan later
+
+Start with the default loop:
+
+1. initialize local planning state
+2. generate a few directions
+3. choose one plan
+4. add one evidence item
+5. review whether to continue or replan
+
 ```bash
 python3 deepplan.py init
-python3 deepplan.py ideate --profile "solo builder" --interests "automation,creator tools" --count 5
+python3 deepplan.py ideate --profile "solo builder" --interests "automation,founder tools" --count 3
 python3 deepplan.py plan \
-  --goal "Ship DeepPlan MVP CLI" \
-  --success-metric "CLI supports plan/replan/decide/risk by 2026-03-15" \
-  --deadline "2026-03-15" \
-  --planning-horizon "12 weeks" \
+  --goal "Validate an AI planning tool for founders" \
+  --success-metric "5 founder users complete one weekly planning review by 2026-04-30" \
+  --deadline "2026-04-30" \
+  --planning-horizon "4 weeks" \
   --review-cadence "weekly" \
-  --phase-plan "phase1 framing,phase2 validation,phase3 refinement" \
+  --phase-plan "phase1 interviews,phase2 weekly review test,phase3 tighten positioning" \
   --constraints "single developer, local repo only" \
-  --direction-insights "Why this initiative matters now" \
-  --market-insights "Who has the strongest pain and why" \
-  --timing-insights "Why now is the right timing" \
-  --differentiation-insights "How this is strategically different" \
-  --monetization-insights "How value turns into revenue" \
-  --constraint-insights "Key constraints and workaround strategy" \
-  --risk-signal-insights "Earliest failure signal and response" \
-  --evolution-insights "How the plan evolves weekly"
-python3 deepplan.py qa
-python3 deepplan.py evidence --claim "Segment shows repeated pain" --source "interview-notes" --confidence 70 --axis market
-python3 deepplan.py discover --question "design agent examples" --context "Need GitHub references for product UX hierarchy" --references "repo-a,repo-b" --apply
-python3 deepplan.py hypothesis --hypothesis "Narrow segment will adopt weekly" --metric "weekly-active-pilot-users" --target ">=20" --window "14 days" --status open
+  --direction-insights "Founders have execution help but weak planning support" \
+  --market-insights "Founder-led teams feel repeated direction drift" \
+  --timing-insights "AI lowered build cost, making direction errors more expensive" \
+  --differentiation-insights "Decision state with evidence and replanning, not task execution" \
+  --monetization-insights "Paid weekly planning workflow for founder teams" \
+  --constraint-insights "Need a narrow user and local-first scope" \
+  --risk-signal-insights "If founders mainly ask for task automation, positioning is wrong" \
+  --evolution-insights "Start with founder planning, expand only after repeated validation"
+python3 deepplan.py evidence --claim "3 founders said direction drift is worse than shipping speed" --source "interviews" --confidence 72 --axis market
+python3 deepplan.py hypothesis --hypothesis "Founders will return weekly for plan review" --metric "weekly review completions" --target ">=5" --window "14 days" --status open
 python3 deepplan.py show
-python3 deepplan.py history
-python3 deepplan.py restore --preview --previous
-python3 deepplan.py health
+python3 deepplan.py review
 ```
 
-## Planning Semantics
+Then expand only if needed:
+
+- `replan`: change direction from new evidence
+- `discover`: structure external reference search before copying patterns
+- `history`: inspect revision history
+- `restore --preview`: inspect a previous revision safely
+- `health`: inspect storage and recovery status
+
+## Planning Commands
 
 DeepPlan is designed around explicit planning loops:
 
@@ -182,11 +278,11 @@ DeepPlan is designed around explicit planning loops:
 - `evidence`: add structured market/product signal
 - `discover`: structure reference search before adopting external patterns
 - `hypothesis`: track testable assumptions
-- `replan`: adjust execution-facing plan state from new evidence
+- `replan`: change the plan from new evidence
 - `review`: inspect plan quality and next questions
-- `restore`: recover an earlier planning snapshot safely
+- `restore`: recover an earlier plan snapshot safely
 
-QA is built into core plan mutations and can trigger auto-replan when the plan is thin but recoverable.
+QA is built into plan updates and can trigger auto-replan when the plan is thin but recoverable.
 
 ## Concurrency, Restore, and Retry
 
@@ -196,7 +292,7 @@ Every current plan state has a `fingerprint`.
 
 - Writes can include `expected_fingerprint`
 - HTTP callers use `If-Match: "<fingerprint>"`
-- stale writes return `412 Precondition Failed`
+- stale writes return `412 Precondition Failed` instead of silently overwriting the plan
 
 ### Restore
 
@@ -221,7 +317,7 @@ Default retry policy is conservative:
 - `restore_revision` is also treated as safe overwrite-style retry
 - append-style operations such as `add_evidence` and `replan` require `allow_non_idempotent_retry=True`
 - when opt-in retry is enabled for append-style operations, the client injects an `idempotency_key` if one is missing
-- generalized write flows can require healthy storage with `require_healthy=True`
+- multi-step write flows can require healthy storage with `require_healthy=True`
 
 ## CLI
 
@@ -229,7 +325,7 @@ Main commands:
 
 - `init`: create `.deeplan/` state files
 - `plan`: create or overwrite core plan fields
-- `replan`: append execution evidence and plan deltas
+- `replan`: update the plan from new evidence
 - `decide`: append a decision record
 - `risk`: append a risk record
 - `evidence`: append structured evidence
@@ -334,7 +430,7 @@ Tool responses use stable `ok`, `tool_name`, and `result_type` fields.
 
 ## Python Client
 
-The repo includes a lightweight integration-facing client in `deepplan_sdk/`.
+The repo includes a lightweight client in `deepplan_sdk/`.
 
 ```python
 from deepplan_sdk import (
@@ -374,7 +470,7 @@ cycle_result = client.capture_evidence_cycle(
 )
 ```
 
-Use the client when another repo needs DeepPlan as a planning kernel without re-implementing:
+Use the client when another repo needs DeepPlan planning state without re-implementing:
 
 - stale-write handling
 - refresh-and-retry policy
@@ -384,10 +480,19 @@ Use the client when another repo needs DeepPlan as a planning kernel without re-
 
 See also:
 
+- `STABILITY.md`
+- `CONTRACT_VERSIONING.md`
+- `spec/plan-state.md`
+- `spec/http-api.md`
+- `spec/conflict-and-restore.md`
 - `docs/integration-agentscope.md`
 - `docs/deepplan-agents-bootstrap.md`
+- `deepplan_reference_adapter.py`
+- `deepplan_reference_host.py`
+- `deepplan_reference_consumer.ts`
 - `examples/deepplan_kernel_adapter.py`
 - `examples/deepplan_planner_host.py`
+- `examples/deepplan_reference_consumer.ts`
 - `deepplan_client.py` remains as a compatibility import path
 
 Install the SDK surface locally from this repo:
@@ -396,29 +501,9 @@ Install the SDK surface locally from this repo:
 python3 -m pip install -e .
 ```
 
-## Product Thesis
+## Design Principles
 
-In the AI era, execution is increasingly commoditized.
-Direction quality is not.
-
-If planning is weak, faster execution only accelerates the wrong path.
-DeepPlan exists to reduce that failure mode.
-
-DeepPlan is `plan-only` by design:
-
-- idea discovery
-- direction setting
-- planning logic
-- success and failure criteria
-
-It intentionally does not try to own execution orchestration or delivery automation.
-
-## Planning Philosophy
-
-Humans bring context from life, experience, and intent.
-AI should improve thinking quality, not just generate tasks.
-
-DeepPlan planning favors:
+DeepPlan favors:
 
 1. Strong references
 2. Actionable insights
@@ -427,24 +512,24 @@ DeepPlan planning favors:
 5. High information density
 6. Multiple viewpoints
 
-## First 10-Minute Outputs
+Humans bring context from experience and intent.
+AI should improve decision quality, not just generate more tasks.
 
-For zero-idea or weakly formed ideas, DeepPlan should quickly produce:
+## 📈 Star History
 
-1. Problem / user hypothesis
-2. Three direction options with one explicit choice
-3. A testable initial plan with metric, deadline, and first tasks
-
-## Messaging Drafts
-
-Slogans:
-
-1. Plan is the product.
-2. Decide what matters before AI builds it.
-3. In the AI era, direction is alpha.
-
-Short copy:
-
-DeepPlan is a Plan Intelligence tool for the AI era.
-Execution is cheap. Direction is expensive.
-When you do not know what to build yet, DeepPlan helps turn ambiguity into a focused, testable, monetizable plan.
+<a href="https://star-history.com/#LEE-Kyungjae/deep-plan&Date">
+  <picture>
+    <source
+      media="(prefers-color-scheme: dark)"
+      srcset="https://api.star-history.com/svg?repos=LEE-Kyungjae/deep-plan&type=Date&theme=dark"
+    />
+    <source
+      media="(prefers-color-scheme: light)"
+      srcset="https://api.star-history.com/svg?repos=LEE-Kyungjae/deep-plan&type=Date"
+    />
+    <img
+      alt="Star History Chart"
+      src="https://api.star-history.com/svg?repos=LEE-Kyungjae/deep-plan&type=Date"
+    />
+  </picture>
+</a>

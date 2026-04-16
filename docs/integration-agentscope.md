@@ -1,6 +1,13 @@
 # DeepPlan Integration Guide
 
-This guide is for a separate integration repo that wants to use DeepPlan as a planning kernel.
+This guide is for a separate integration repo that wants to use DeepPlan as its planning state layer.
+
+Use DeepPlan when your runtime needs one place to keep:
+
+- the current plan
+- evidence and hypotheses behind that plan
+- revision history
+- restore points when direction changes
 
 DeepPlan should sit under your multi-agent runtime, not replace it.
 
@@ -16,8 +23,8 @@ Use DeepPlan when you need:
 
 - one authoritative planning state
 - evidence-backed planning updates
-- revision-aware rollback
-- optimistic concurrency for agent writes
+- revision-aware restore
+- stale-write protection for agent writes
 - planning QA and health gating
 
 Do not use DeepPlan for:
@@ -74,13 +81,13 @@ Inspect:
 
 ## Conflict Model
 
-DeepPlan uses optimistic concurrency:
+DeepPlan uses fingerprint-based stale-write protection:
 
 - current plan state is identified by `fingerprint`
 - stale writes fail with `412`
 - Python client surfaces that as `DeepPlanConflictError`
 
-This is coordination behavior, not a transport failure.
+This is a coordination signal, not a transport failure.
 
 Useful fields on `DeepPlanConflictError`:
 
@@ -184,6 +191,11 @@ For a separate AgentScope-style repo:
 3. give the planner agent only the adapter surface
 4. use `get_cycle()` as the pre/post step context
 5. keep execution/runtime memory outside DeepPlan
+
+The goal is simple:
+
+- DeepPlan decides what the current plan is
+- your runtime decides what to execute next
 
 ## Relevant Client Methods
 

@@ -33,6 +33,18 @@
       "value_from": "fresh.payload.fingerprint"
     },
     {
+      "target": "stale",
+      "path": "payload.error_code",
+      "op": "eq",
+      "value": "plan_fingerprint_mismatch"
+    },
+    {
+      "target": "stale",
+      "path": "payload.retryable",
+      "op": "eq",
+      "value": true
+    },
+    {
       "target": "fresh",
       "path": "headers.ETag",
       "op": "etag_matches_payload_fingerprint",

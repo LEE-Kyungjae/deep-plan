@@ -885,6 +885,18 @@ class DeepPlanRegressionTests(unittest.TestCase):
 
         self.assertIn("Schema Match: yes", output)
 
+    def test_cmd_conformance_returns_machine_readable_report(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                deepplan.cmd_conformance(type("Args", (), {"base_url": "", "in_process": True})())
+            payload = json.loads(stdout.getvalue())
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["passed"], payload["case_count"])
+        self.assertEqual(payload["failed"], 0)
+
     def test_cmd_run_dry_run_returns_restore_preview_envelope(self):
         stdout = io.StringIO()
         with redirect_stdout(stdout):

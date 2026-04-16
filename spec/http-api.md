@@ -37,6 +37,30 @@ Returns storage health and recovery diagnostics.
 If the storage status is `error`, the HTTP status MUST be `503`.
 Otherwise the HTTP status MUST be `200`.
 
+### `GET /doctor`
+
+Returns aggregated contract readiness diagnostics.
+
+The response SHOULD include:
+
+- storage health
+- schema drift status
+- tool schema contract status
+- host action contract loadability
+- conformance manifest status
+- `checks`
+- `check_summary`
+
+Each check SHOULD expose:
+
+- `id`
+- `status` with one of `pass`, `warn`, or `fail`
+- `summary`
+- `hint`
+
+If any check fails, the aggregated doctor status MUST be `error` and the HTTP status MUST be `503`.
+Otherwise the HTTP status MUST be `200`.
+
 ### `GET /cycle?limit=<n>`
 
 Returns a combined read snapshot.
@@ -69,6 +93,26 @@ Returns structural validation for the current plan.
 ### `GET /tools`
 
 Returns the tool schema catalogue.
+
+### `GET /contracts`
+
+Returns the current contract catalogue for this implementation.
+
+The response SHOULD include:
+
+- contract version
+- implementation version
+- spec entrypoint
+- `summary`
+- `stability_levels`
+- host action contract metadata
+- conformance manifest metadata
+- tool catalogue count
+- profile/capability summary for host action contracts
+
+### `GET /host/action-contract?role=<role>`
+
+Returns the role-specific host action contract derived from the shared host action contract artifact.
 
 ## Write Endpoints
 
@@ -136,4 +180,12 @@ The current implementation emits these error cases:
 - `412` for fingerprint conflicts
 - `500` for unexpected internal errors
 
-On fingerprint conflicts, the error payload MUST include `error: "plan fingerprint mismatch"` and SHOULD include `current_fingerprint`.
+Each error envelope MUST include:
+
+- `error`
+- `type`
+- `error_code`
+- `retryable`
+
+The service SHOULD include `operation` and `step` when the failing stage is known.
+On fingerprint conflicts, the error payload MUST include `error: "plan fingerprint mismatch"`, MUST include `error_code: "plan_fingerprint_mismatch"`, MUST include `retryable: true`, and SHOULD include `current_fingerprint`.

@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 import deepplan
+from deepplan_host_contract import host_action_contract
 from deepplan_server import DeepPlanHandler
 
 
@@ -132,6 +133,10 @@ class DeepPlanServerTests(unittest.TestCase):
 
         self.assertEqual(status, 412)
         self.assertEqual(payload["error"], "plan fingerprint mismatch")
+        self.assertEqual(payload["error_code"], "plan_fingerprint_mismatch")
+        self.assertTrue(payload["retryable"])
+        self.assertEqual(payload["operation"], "update_plan")
+        self.assertEqual(payload["step"], "mutation")
         self.assertIn("current_fingerprint", payload)
 
     def test_post_evidence_reuses_idempotency_key_without_duplicate_append(self):
@@ -169,6 +174,10 @@ class DeepPlanServerTests(unittest.TestCase):
 
         self.assertEqual(status, 400)
         self.assertEqual(payload["error"], "empty_body")
+        self.assertEqual(payload["error_code"], "empty_body")
+        self.assertFalse(payload["retryable"])
+        self.assertEqual(payload["operation"], "request_body")
+        self.assertEqual(payload["step"], "read")
 
     def test_get_history_returns_revision_entries(self):
         with DeepPlanStateIsolation():
@@ -204,6 +213,45 @@ class DeepPlanServerTests(unittest.TestCase):
         self.assertIn("logs", payload)
         self.assertIn("revisions", payload["logs"])
         self.assertIn("recovery_candidate_available", payload)
+
+    def test_get_doctor_returns_contract_readiness_report(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            handler = build_handler("GET", "/doctor")
+            handler.do_GET()
+            status, payload, _headers = decode_response(handler)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["contract_version"], deepplan.CONTRACT_VERSION)
+        self.assertIn("checks", payload)
+        self.assertIn("check_summary", payload)
+        self.assertGreaterEqual(len(payload["checks"]), 5)
+        self.assertEqual(payload["check_summary"]["fail"], 0)
+        self.assertGreaterEqual(payload["check_summary"]["warn"], 1)
+        self.assertIn("schema_drift", payload)
+        self.assertIn("tool_schema", payload)
+        self.assertIn("host_action_contract", payload)
+        self.assertIn("conformance", payload)
+
+    def test_get_contracts_returns_catalog(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            handler = build_handler("GET", "/contracts")
+            handler.do_GET()
+            status, payload, _headers = decode_response(handler)
+
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["result_type"], "contracts")
+        self.assertEqual(payload["contract_version"], deepplan.CONTRACT_VERSION)
+        self.assertIn("stability_levels", payload)
+        self.assertIn("summary", payload)
+        self.assertGreaterEqual(payload["summary"]["experimental_contract_count"], 1)
+        self.assertIn("spec_entrypoint", payload)
+        self.assertIn("host_action_contract", payload["contracts"])
+        self.assertIn("profile_summary", payload["contracts"]["host_action_contract"])
+        self.assertIn("conformance_manifest", payload["contracts"])
 
     def test_get_cycle_returns_plan_qa_health_and_history(self):
         with DeepPlanStateIsolation():
@@ -382,6 +430,10 @@ class DeepPlanServerTests(unittest.TestCase):
 
         self.assertEqual(status, 412)
         self.assertEqual(payload["error"], "plan fingerprint mismatch")
+        self.assertEqual(payload["error_code"], "plan_fingerprint_mismatch")
+        self.assertTrue(payload["retryable"])
+        self.assertEqual(payload["operation"], "restore_revision")
+        self.assertEqual(payload["step"], "mutation")
         self.assertIn("current_fingerprint", payload)
         self.assertEqual(response_headers.get("ETag"), f'"{payload["current_fingerprint"]}"')
 
@@ -423,8 +475,26 @@ class DeepPlanServerTests(unittest.TestCase):
 
         self.assertEqual(status, 412)
         self.assertEqual(payload["error"], "plan fingerprint mismatch")
+        self.assertEqual(payload["error_code"], "plan_fingerprint_mismatch")
+        self.assertTrue(payload["retryable"])
+        self.assertEqual(payload["operation"], "restore_revision")
+        self.assertEqual(payload["step"], "mutation")
         self.assertIn("current_fingerprint", payload)
         self.assertEqual(response_headers.get("ETag"), f'"{payload["current_fingerprint"]}"')
+
+    def test_invalid_cycle_limit_returns_machine_readable_error_envelope(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            handler = build_handler("GET", "/cycle?limit=nope")
+            handler.do_GET()
+            status, payload, _headers = decode_response(handler)
+
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"], "limit must be an integer")
+        self.assertEqual(payload["error_code"], "invalid_request")
+        self.assertFalse(payload["retryable"])
+        self.assertEqual(payload["operation"], "cycle_snapshot")
+        self.assertEqual(payload["step"], "query")
 
     def test_agent_act_maps_restore_preview_command(self):
         with DeepPlanStateIsolation():
@@ -480,6 +550,71 @@ class DeepPlanServerTests(unittest.TestCase):
 
         self.assertEqual(status, 200)
         self.assertEqual(payload["result"]["selected_via"], "previous")
+
+    def test_capture_evidence_cycle_tool_wrapper_returns_planning_cycle(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            handler = build_handler(
+                "POST",
+                "/tools/capture_evidence_cycle",
+                body=json.dumps(
+                    {
+                        "input": {
+                            "evidence": {
+                                "claim": "Server cycle evidence",
+                                "source": "pilot-call",
+                                "confidence": 74,
+                            },
+                            "replan": {
+                                "plan_task": "Update activation follow-up",
+                            },
+                            "idempotency_key": "server-cycle-1",
+                            "history_limit": 1,
+                        }
+                    }
+                ).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            handler.do_POST()
+            status, payload, headers = decode_response(handler)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["tool"], "capture_evidence_cycle")
+        self.assertEqual(payload["result"]["result_type"], "planning_cycle")
+        self.assertEqual(payload["result"]["operation"], "capture_evidence_cycle")
+        self.assertEqual(payload["result"]["post_cycle"]["history_limit"], 1)
+        self.assertIn("evidence_result", payload["result"])
+        self.assertIn("replan_result", payload["result"])
+        self.assertEqual(headers.get("ETag"), f'"{payload["result"]["post_fingerprint"]}"')
+
+    def test_get_host_action_contract_returns_shared_contract(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            handler = build_handler("GET", "/host/action-contract?role=reviewer")
+            handler.do_GET()
+            status, payload, _headers = decode_response(handler)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["role"], "reviewer")
+        self.assertEqual(payload["profile"], "reviewer_restore")
+        self.assertEqual(payload["allowed_actions"], ["preview_restore_previous", "restore_previous"])
+        self.assertEqual(payload["capabilities"], ["plan.read", "plan.restore"])
+        self.assertEqual(payload["actions"], host_action_contract("reviewer")["actions"])
+        self.assertIn("input_schema", payload)
+        action_map = {item["action"]: item for item in payload["actions"]}
+        self.assertEqual(action_map["restore_previous"]["required_capabilities"], ["plan.restore"])
+        self.assertEqual(action_map["preview_restore_previous"]["required_capabilities"], ["plan.read"])
+
+    def test_get_host_action_contract_rejects_unknown_role(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            handler = build_handler("GET", "/host/action-contract?role=ghost")
+            handler.do_GET()
+            status, payload, _headers = decode_response(handler)
+
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["type"], "error")
+        self.assertEqual(payload["error"], "unknown host role: ghost")
 
 
 if __name__ == "__main__":

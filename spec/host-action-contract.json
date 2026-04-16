@@ -1,0 +1,98 @@
+{
+  "version": "v1",
+  "actions": [
+    {
+      "action": "update_plan",
+      "description": "Apply top-level plan changes and return an integrated cycle snapshot.",
+      "required_capabilities": ["plan.write"],
+      "payload_required": false,
+      "payload_keys": ["goal", "success_metric", "deadline", "planning_horizon", "review_cadence", "selected_option"],
+      "options": ["expected_fingerprint", "allow_retry", "require_healthy", "history_limit"]
+    },
+    {
+      "action": "capture_evidence_cycle",
+      "description": "Append evidence, run replan, and return the post-cycle snapshot.",
+      "required_capabilities": ["evidence.append_and_replan"],
+      "payload_required": true,
+      "payload_keys": ["evidence", "replan", "idempotency_key"],
+      "options": ["expected_fingerprint", "allow_retry", "require_healthy", "history_limit"]
+    },
+    {
+      "action": "preview_restore_previous",
+      "description": "Preview restoring the previous revision without mutating plan state.",
+      "required_capabilities": ["plan.read"],
+      "payload_required": false,
+      "payload_keys": [],
+      "options": []
+    },
+    {
+      "action": "restore_previous",
+      "description": "Restore the previous revision and return an integrated cycle snapshot.",
+      "required_capabilities": ["plan.restore"],
+      "payload_required": false,
+      "payload_keys": [],
+      "options": ["expected_fingerprint", "allow_retry", "require_healthy", "history_limit"]
+    }
+  ],
+  "capabilities": [
+    {
+      "name": "plan.read",
+      "description": "Read current plan, validation, history, and restore previews."
+    },
+    {
+      "name": "plan.write",
+      "description": "Apply top-level plan updates."
+    },
+    {
+      "name": "evidence.append_and_replan",
+      "description": "Append evidence and run a planning cycle."
+    },
+    {
+      "name": "plan.restore",
+      "description": "Restore a previous revision."
+    }
+  ],
+  "profiles": {
+    "planner_full": {
+      "capabilities": ["plan.read", "plan.write", "evidence.append_and_replan", "plan.restore"],
+      "allowed_actions": ["update_plan", "capture_evidence_cycle", "preview_restore_previous", "restore_previous"]
+    },
+    "researcher_capture": {
+      "capabilities": ["plan.read", "evidence.append_and_replan"],
+      "allowed_actions": ["capture_evidence_cycle", "preview_restore_previous"]
+    },
+    "reviewer_restore": {
+      "capabilities": ["plan.read", "plan.restore"],
+      "allowed_actions": ["preview_restore_previous", "restore_previous"]
+    }
+  },
+  "role_profiles": {
+    "planner": "planner_full",
+    "researcher": "researcher_capture",
+    "reviewer": "reviewer_restore"
+  },
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": ["update_plan", "capture_evidence_cycle", "preview_restore_previous", "restore_previous"]
+      },
+      "payload": {
+        "type": "object"
+      },
+      "options": {
+        "type": "object",
+        "properties": {
+          "expected_fingerprint": {"type": "string"},
+          "allow_retry": {"type": "boolean"},
+          "require_healthy": {"type": "boolean"},
+          "history_limit": {"type": "integer"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "required": ["action"],
+    "additionalProperties": false
+  }
+}

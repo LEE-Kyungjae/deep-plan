@@ -13,6 +13,10 @@ class DeepPlanClientError(RuntimeError):
         self.status = status
         self.payload = payload
         self.headers = headers
+        self.error_code = str(payload.get("error_code", "")).strip()
+        self.retryable = bool(payload.get("retryable", False))
+        self.operation = str(payload.get("operation", "")).strip()
+        self.step = str(payload.get("step", "")).strip()
 
 
 class DeepPlanConflictError(DeepPlanClientError):
@@ -31,8 +35,8 @@ class DeepPlanConflictError(DeepPlanClientError):
         super().__init__(status, payload, headers)
         self.expected_fingerprint = expected_fingerprint
         self.current_fingerprint = current_fingerprint
-        self.operation = operation
-        self.step = step
+        self.operation = operation or self.operation
+        self.step = step or self.step
         self.can_refresh = can_refresh
 
     def with_context(self, operation: str, step: str) -> "DeepPlanConflictError":
@@ -146,6 +150,9 @@ class DeepPlanClient:
                     response_headers,
                     expected_fingerprint=fingerprint,
                     current_fingerprint=current_fingerprint,
+                    operation=str(payload.get("operation", "")).strip(),
+                    step=str(payload.get("step", "")).strip(),
+                    can_refresh=bool(payload.get("retryable", True)),
                 )
             raise DeepPlanClientError(status, payload, response_headers)
         return payload
@@ -190,11 +197,20 @@ class DeepPlanClient:
     def get_health(self) -> Dict[str, Any]:
         return self.request("GET", "/health")
 
+    def get_doctor(self) -> Dict[str, Any]:
+        return self.request("GET", "/doctor")
+
     def get_cycle(self, *, history_limit: int = 10) -> Dict[str, Any]:
         return self.request("GET", f"/cycle?limit={int(history_limit)}")
 
     def get_history(self) -> Dict[str, Any]:
         return self.request("GET", "/history")
+
+    def get_contracts(self) -> Dict[str, Any]:
+        return self.request("GET", "/contracts")
+
+    def get_host_action_contract(self, *, role: str = "planner") -> Dict[str, Any]:
+        return self.request("GET", f"/host/action-contract?role={role}")
 
     def validate_plan(self) -> Dict[str, Any]:
         return self.request("GET", "/validate")
@@ -341,40 +357,78 @@ class DeepPlanClient:
         replan_payload: Optional[Dict[str, Any]] = None,
         history_limit: int = 10,
         idempotency_key: str = "",
+        expected_fingerprint: str = "",
+        allow_retry: bool = False,
+        require_healthy: bool = False,
     ) -> Dict[str, Any]:
-        before = self.get_cycle(history_limit=history_limit)
         cycle_key = str(idempotency_key).strip()
-        evidence_key = f"{cycle_key}:evidence" if cycle_key else ""
-        replan_key = f"{cycle_key}:replan" if cycle_key else ""
+        if allow_retry and not cycle_key:
+            cycle_key = f"capture_evidence_cycle_{uuid4().hex}"
+
+        def run_cycle(write_fingerprint: str = "") -> Dict[str, Any]:
+            before = self.get_cycle(history_limit=history_limit)
+            if require_healthy:
+                self._enforce_write_health("capture_evidence_cycle", before, "preflight")
+            evidence_key = f"{cycle_key}:evidence" if cycle_key else ""
+            replan_key = f"{cycle_key}:replan" if cycle_key else ""
+            try:
+                evidence_result = self.add_evidence(
+                    evidence_payload,
+                    expected_fingerprint=write_fingerprint,
+                    idempotency_key=evidence_key,
+                )
+            except DeepPlanConflictError as exc:
+                raise exc.with_context("capture_evidence_cycle", "add_evidence") from exc
+            except DeepPlanClientError as exc:
+                raise DeepPlanClientOperationError("capture_evidence_cycle", "add_evidence", exc) from exc
+            replan_input = dict(replan_payload or {})
+            try:
+                replan_result = self.replan(
+                    replan_input,
+                    expected_fingerprint=str(evidence_result.get("fingerprint", "")).strip(),
+                    idempotency_key=replan_key,
+                )
+            except DeepPlanConflictError as exc:
+                raise exc.with_context("capture_evidence_cycle", "replan") from exc
+            except DeepPlanClientError as exc:
+                raise DeepPlanClientOperationError("capture_evidence_cycle", "replan", exc) from exc
+            try:
+                after = self.get_cycle(history_limit=history_limit)
+            except DeepPlanClientError as exc:
+                raise DeepPlanClientOperationError("capture_evidence_cycle", "post_cycle", exc) from exc
+            result = self._build_cycle_operation_result(
+                operation="capture_evidence_cycle",
+                before=before,
+                mutation_result=replan_result,
+                after=after,
+                step_results={
+                    "add_evidence": evidence_result,
+                    "replan": replan_result,
+                },
+            )
+            result["evidence_result"] = evidence_result
+            result["replan_result"] = replan_result
+            if cycle_key:
+                result["idempotency_key"] = cycle_key
+            return result
+
         try:
-            evidence_result = self.add_evidence(evidence_payload, idempotency_key=evidence_key)
+            result = run_cycle(expected_fingerprint)
+            result["retried"] = False
+            result["attempts"] = 1
+            return result
         except DeepPlanConflictError as exc:
-            raise exc.with_context("capture_evidence_cycle", "add_evidence") from exc
-        except DeepPlanClientError as exc:
-            raise DeepPlanClientOperationError("capture_evidence_cycle", "add_evidence", exc) from exc
-        replan_input = dict(replan_payload or {})
-        try:
-            replan_result = self.replan(replan_input, idempotency_key=replan_key)
-        except DeepPlanConflictError as exc:
-            raise exc.with_context("capture_evidence_cycle", "replan") from exc
-        except DeepPlanClientError as exc:
-            raise DeepPlanClientOperationError("capture_evidence_cycle", "replan", exc) from exc
-        try:
-            after = self.get_cycle(history_limit=history_limit)
-        except DeepPlanClientError as exc:
-            raise DeepPlanClientOperationError("capture_evidence_cycle", "post_cycle", exc) from exc
-        result = self._build_cycle_operation_result(
-            operation="capture_evidence_cycle",
-            before=before,
-            mutation_result=replan_result,
-            after=after,
-            step_results={
-                "add_evidence": evidence_result,
-                "replan": replan_result,
-            },
-        )
-        result["evidence_result"] = evidence_result
-        result["replan_result"] = replan_result
-        if cycle_key:
-            result["idempotency_key"] = cycle_key
-        return result
+            if not allow_retry or not exc.can_refresh:
+                raise
+            refreshed = self.get_cycle(history_limit=history_limit)
+            if require_healthy:
+                self._enforce_write_health("capture_evidence_cycle", refreshed, "retry_preflight")
+            retry_fingerprint = str(refreshed.get("fingerprint", "")).strip() or exc.current_fingerprint
+            result = run_cycle(retry_fingerprint)
+            result["retried"] = True
+            result["attempts"] = 2
+            result["retry_from_fingerprint"] = exc.expected_fingerprint
+            result["retry_to_fingerprint"] = retry_fingerprint
+            if cycle_key:
+                result["idempotency_key"] = cycle_key
+            return result

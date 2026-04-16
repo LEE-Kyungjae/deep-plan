@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 import argparse
 import hashlib
+import importlib
 import json
 import re
+import shutil
+import tempfile
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -11,7 +14,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from deepplan_store import FilePlanStore, PlanConflictError
 
 
-ROOT = Path(__file__).resolve().parent
+CODE_ROOT = Path(__file__).resolve().parent
+ROOT = CODE_ROOT
 STATE_DIR = ROOT / ".deeplan"
 PLAN_PATH = STATE_DIR / "plan.json"
 DECISIONS_PATH = STATE_DIR / "decisions.jsonl"
@@ -23,6 +27,9 @@ REVISION_RETENTION_LIMIT = 100
 STATE_LOCK = None
 IMPLEMENTATION_VERSION = "0.5.0"
 CONTRACT_VERSION = "0.5.0"
+SPEC_DIR = CODE_ROOT / "spec"
+CONTRACTS_TEST_DIR = CODE_ROOT / "tests" / "contracts"
+CONTRACTS_MANIFEST_PATH = CONTRACTS_TEST_DIR / "manifest.json"
 
 
 def now_iso() -> str:
@@ -381,7 +388,7 @@ def build_plan_schema() -> Dict:
 
 
 def schema_path() -> Path:
-    return ROOT / "schemas" / "plan.schema.json"
+    return CODE_ROOT / "schemas" / "plan.schema.json"
 
 
 def load_plan_schema() -> Dict:
@@ -680,6 +687,360 @@ def jsonl_health(path: Path) -> Dict:
 def maintenance_report(apply: bool = False) -> Dict:
     _sync_store_paths()
     return STORE.maintenance_report(apply=apply)
+
+
+def load_contracts_manifest() -> Dict[str, Any]:
+    if not CONTRACTS_MANIFEST_PATH.exists():
+        raise ValueError(f"missing contracts manifest: {CONTRACTS_MANIFEST_PATH}")
+    payload = json.loads(CONTRACTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("contracts manifest must be an object")
+    return payload
+
+
+def _doctor_check(check_id: str, status: str, summary: str, hint: str, details: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    check: Dict[str, Any] = {
+        "id": check_id,
+        "status": status,
+        "summary": summary,
+        "hint": hint,
+    }
+    if details is not None:
+        check["details"] = details
+    return check
+
+
+def _check_summary(checks: List[Dict[str, Any]]) -> Dict[str, int]:
+    summary = {"pass": 0, "warn": 0, "fail": 0}
+    for check in checks:
+        status = str(check.get("status", "")).strip()
+        if status in summary:
+            summary[status] += 1
+    return summary
+
+
+def contracts_catalog() -> Dict[str, Any]:
+    from deepplan_agent import list_tools
+    from deepplan_host_contract import load_host_action_contract_file
+
+    manifest = load_contracts_manifest()
+    host_contract = load_host_action_contract_file()
+    actions = host_contract.get("actions", [])
+    profiles = host_contract.get("profiles", {})
+    role_profiles = host_contract.get("role_profiles", {})
+    capabilities = host_contract.get("capabilities", [])
+    stable_contracts = ["plan_state", "conflict_and_restore", "http_api", "conformance_manifest"]
+    experimental_contracts = ["host_action_contract"]
+    return {
+        "ok": True,
+        "result_type": "contracts",
+        "contract_version": CONTRACT_VERSION,
+        "implementation_version": IMPLEMENTATION_VERSION,
+        "spec_entrypoint": str(SPEC_DIR / "README.md"),
+        "stability_policy_path": str(ROOT / "STABILITY.md"),
+        "versioning_policy_path": str(ROOT / "CONTRACT_VERSIONING.md"),
+        "summary": {
+            "contract_count": len(stable_contracts) + len(experimental_contracts),
+            "stable_contract_count": len(stable_contracts),
+            "experimental_contract_count": len(experimental_contracts),
+            "tool_catalog_count": len(list_tools()),
+            "profile_count": len(profiles) if isinstance(profiles, dict) else 0,
+            "role_count": len(role_profiles) if isinstance(role_profiles, dict) else 0,
+            "capability_count": len(capabilities) if isinstance(capabilities, list) else 0,
+        },
+        "stability_levels": {
+            "stable": stable_contracts,
+            "experimental": experimental_contracts,
+        },
+        "contracts": {
+            "plan_state": {
+                "path": str(SPEC_DIR / "plan-state.md"),
+                "version": CONTRACT_VERSION,
+                "stability": "stable",
+            },
+            "conflict_and_restore": {
+                "path": str(SPEC_DIR / "conflict-and-restore.md"),
+                "version": CONTRACT_VERSION,
+                "stability": "stable",
+            },
+            "http_api": {
+                "path": str(SPEC_DIR / "http-api.md"),
+                "version": CONTRACT_VERSION,
+                "stability": "stable",
+            },
+            "host_action_contract": {
+                "path": str(SPEC_DIR / "host-action-contract.json"),
+                "version": str(host_contract.get("version", "")).strip(),
+                "stability": "experimental",
+                "action_count": len(actions) if isinstance(actions, list) else 0,
+                "profile_count": len(profiles) if isinstance(profiles, dict) else 0,
+                "role_count": len(role_profiles) if isinstance(role_profiles, dict) else 0,
+                "capability_count": len(capabilities) if isinstance(capabilities, list) else 0,
+                "profile_summary": {
+                    "profile_names": sorted(str(name) for name in profiles) if isinstance(profiles, dict) else [],
+                    "role_names": sorted(str(name) for name in role_profiles) if isinstance(role_profiles, dict) else [],
+                    "capability_names": [str(item.get("name", "")).strip() for item in capabilities] if isinstance(capabilities, list) else [],
+                },
+                "profile_names": sorted(str(name) for name in profiles) if isinstance(profiles, dict) else [],
+                "role_names": sorted(str(name) for name in role_profiles) if isinstance(role_profiles, dict) else [],
+                "capability_names": [str(item.get("name", "")).strip() for item in capabilities] if isinstance(capabilities, list) else [],
+            },
+            "conformance_manifest": {
+                "path": str(CONTRACTS_MANIFEST_PATH),
+                "version": str(manifest.get("version", "")).strip(),
+                "case_count": len(manifest.get("cases", [])) if isinstance(manifest.get("cases"), list) else 0,
+                "stability": "stable",
+            },
+        },
+    }
+
+
+def doctor_report() -> Dict[str, Any]:
+    from deepplan_agent import tool_schema_contract_report
+    from deepplan_host_contract import load_host_action_contract_file
+
+    issues: List[str] = []
+    health = storage_health_report()
+    schema = schema_drift_report()
+    tool_schema = tool_schema_contract_report()
+    checks: List[Dict[str, Any]] = []
+
+    host_loadable = True
+    host_issues: List[str] = []
+    host_action_count = 0
+    host_role_count = 0
+    host_profile_count = 0
+    host_capability_count = 0
+    host_version = ""
+    try:
+        host_contract = load_host_action_contract_file()
+        host_version = str(host_contract.get("version", "")).strip()
+        actions = host_contract.get("actions", [])
+        profiles = host_contract.get("profiles", {})
+        role_profiles = host_contract.get("role_profiles", {})
+        capabilities = host_contract.get("capabilities", [])
+        input_schema = host_contract.get("input_schema", {})
+        if not isinstance(actions, list) or not actions:
+            host_issues.append("host_action_contract_missing_actions")
+        else:
+            host_action_count = len(actions)
+        if not isinstance(profiles, dict) or not profiles:
+            host_issues.append("host_action_contract_missing_profiles")
+        else:
+            host_profile_count = len(profiles)
+        if not isinstance(role_profiles, dict) or not role_profiles:
+            host_issues.append("host_action_contract_missing_role_profiles")
+        else:
+            host_role_count = len(role_profiles)
+        if not isinstance(capabilities, list) or not capabilities:
+            host_issues.append("host_action_contract_missing_capabilities")
+        else:
+            host_capability_count = len(capabilities)
+        if not isinstance(input_schema, dict) or not input_schema:
+            host_issues.append("host_action_contract_missing_input_schema")
+    except Exception as exc:
+        host_loadable = False
+        host_issues.append(f"host_action_contract_load_failed:{exc}")
+
+    conformance_issues: List[str] = []
+    manifest_version = ""
+    case_count = 0
+    missing_case_files: List[str] = []
+    try:
+        manifest = load_contracts_manifest()
+        manifest_version = str(manifest.get("version", "")).strip()
+        cases = manifest.get("cases", [])
+        if not isinstance(cases, list):
+            conformance_issues.append("contracts_manifest_cases_not_array")
+            cases = []
+        case_count = len(cases)
+        for case in cases:
+            filename = str(case.get("file", "")).strip()
+            if not filename:
+                missing_case_files.append("<missing-file-field>")
+                continue
+            if not (CONTRACTS_TEST_DIR / filename).exists():
+                missing_case_files.append(filename)
+        if missing_case_files:
+            conformance_issues.append("contracts_manifest_missing_case_files")
+    except Exception as exc:
+        conformance_issues.append(f"contracts_manifest_load_failed:{exc}")
+
+    health_status = str(health.get("status", "")).strip()
+    if health_status == "error":
+        checks.append(
+            _doctor_check(
+                "storage_health",
+                "fail",
+                "Storage health is in an error state.",
+                "Fix the storage health issue before relying on this instance.",
+                {
+                    "status": health_status,
+                    "issues": health.get("issues", []),
+                },
+            )
+        )
+    elif health_status == "degraded":
+        checks.append(
+            _doctor_check(
+                "storage_health",
+                "warn",
+                "Storage health is degraded.",
+                "Inspect the storage issues and prune or repair the affected logs.",
+                {
+                    "status": health_status,
+                    "issues": health.get("issues", []),
+                },
+            )
+        )
+    else:
+        checks.append(
+            _doctor_check(
+                "storage_health",
+                "pass",
+                "Storage health is ok.",
+                "No storage action required.",
+                {
+                    "status": health_status or "ok",
+                    "issues": health.get("issues", []),
+                },
+            )
+        )
+
+    schema_matches = bool(schema.get("matches", False))
+    checks.append(
+        _doctor_check(
+            "plan_schema_drift",
+            "pass" if schema_matches else "fail",
+            "Runtime plan schema matches the checked-in schema." if schema_matches else "Runtime plan schema differs from the checked-in schema.",
+            "Regenerate or reconcile schemas/plan.schema.json with the runtime schema builder.",
+            schema,
+        )
+    )
+
+    tool_schema_matches = bool(tool_schema.get("matches", False))
+    checks.append(
+        _doctor_check(
+            "tool_schema_contract",
+            "pass" if tool_schema_matches else "fail",
+            "Tool schema contract matches runtime expectations." if tool_schema_matches else "Tool schema contract drift was detected.",
+            "Update deepplan_agent tool schemas and validators together.",
+            tool_schema,
+        )
+    )
+
+    checks.append(
+        _doctor_check(
+            "host_action_contract",
+            "fail" if (not host_loadable or host_issues) else "pass",
+            "Host action contract loaded successfully." if (host_loadable and not host_issues) else "Host action contract is incomplete or failed to load.",
+            "Keep spec/host-action-contract.json parseable and in sync with host runtime expectations.",
+            {
+                "loadable": host_loadable,
+                "version": host_version,
+                "action_count": host_action_count,
+                "profile_count": host_profile_count,
+                "role_count": host_role_count,
+                "capability_count": host_capability_count,
+                "issues": host_issues,
+            },
+        )
+    )
+
+    checks.append(
+        _doctor_check(
+            "host_action_contract_stability",
+            "warn",
+            "Host action contract is still experimental.",
+            "Do not depend on this orchestration surface as a stable external contract yet.",
+            {
+                "stability": "experimental",
+                "profile_count": host_profile_count,
+                "role_count": host_role_count,
+                "capability_count": host_capability_count,
+            },
+        )
+    )
+
+    if conformance_issues:
+        checks.append(
+            _doctor_check(
+                "conformance_manifest",
+                "fail",
+                "Conformance manifest is not fully loadable or complete.",
+                "Fix tests/contracts/manifest.json and the referenced case files.",
+                {
+                    "manifest_path": str(CONTRACTS_MANIFEST_PATH),
+                    "manifest_version": manifest_version,
+                    "case_count": case_count,
+                    "missing_case_files": missing_case_files,
+                    "issues": conformance_issues,
+                },
+            )
+        )
+    else:
+        checks.append(
+            _doctor_check(
+                "conformance_manifest",
+                "pass",
+                "Conformance manifest is loadable and complete.",
+                "Repository-local contract fixtures are available.",
+                {
+                    "manifest_path": str(CONTRACTS_MANIFEST_PATH),
+                    "manifest_version": manifest_version,
+                    "case_count": case_count,
+                    "missing_case_files": missing_case_files,
+                    "issues": conformance_issues,
+                },
+            )
+        )
+
+    checks.append(
+        _doctor_check(
+            "external_conformance_runner",
+            "warn",
+            "External conformance runner is not yet packaged.",
+            "The current conformance suite is repository-local; add a standalone runner before treating it as certification.",
+            {
+                "current_runner": "repository-local pytest/unittest fixture suite",
+                "status": "pending",
+            },
+        )
+    )
+
+    issues.extend(check["id"] for check in checks if check["status"] != "pass")
+
+    status = "ok"
+    if any(check["status"] == "fail" for check in checks):
+        status = "error"
+
+    return {
+        "status": status,
+        "contract_version": CONTRACT_VERSION,
+        "implementation_version": IMPLEMENTATION_VERSION,
+        "check_summary": _check_summary(checks),
+        "checks": checks,
+        "health": health,
+        "schema_drift": schema,
+        "tool_schema": tool_schema,
+        "host_action_contract": {
+            "loadable": host_loadable,
+            "version": host_version,
+            "action_count": host_action_count,
+            "profile_count": host_profile_count,
+            "role_count": host_role_count,
+            "capability_count": host_capability_count,
+            "issues": host_issues,
+        },
+        "conformance": {
+            "manifest_path": str(CONTRACTS_MANIFEST_PATH),
+            "manifest_version": manifest_version,
+            "case_count": case_count,
+            "missing_case_files": missing_case_files,
+            "issues": conformance_issues,
+        },
+        "issues": issues,
+    }
 
 
 def storage_health_report() -> Dict:
@@ -2146,6 +2507,85 @@ def cmd_maintenance(args: argparse.Namespace) -> None:
         )
 
 
+def cmd_conformance(args: argparse.Namespace) -> None:
+    from deepplan_conformance import build_transport, run_manifest
+
+    global ROOT, STATE_DIR, PLAN_PATH, DECISIONS_PATH, RISKS_PATH, EVENTS_PATH, REVISIONS_PATH
+    deepplan_module = importlib.import_module("deepplan")
+
+    base_url = args.base_url or None
+    transport = build_transport(base_url=base_url, in_process=bool(args.in_process or not args.base_url))
+    if base_url:
+        report = run_manifest(transport)
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        if not report.get("ok", False):
+            raise SystemExit(1)
+        return
+
+    original_root = ROOT
+    original_state_dir = STATE_DIR
+    original_plan_path = PLAN_PATH
+    original_decisions_path = DECISIONS_PATH
+    original_risks_path = RISKS_PATH
+    original_events_path = EVENTS_PATH
+    original_revisions_path = REVISIONS_PATH
+    original_module_root = deepplan_module.ROOT
+    original_module_state_dir = deepplan_module.STATE_DIR
+    original_module_plan_path = deepplan_module.PLAN_PATH
+    original_module_decisions_path = deepplan_module.DECISIONS_PATH
+    original_module_risks_path = deepplan_module.RISKS_PATH
+    original_module_events_path = deepplan_module.EVENTS_PATH
+    original_module_revisions_path = deepplan_module.REVISIONS_PATH
+    tempdir = tempfile.TemporaryDirectory()
+    isolated_root = Path(tempdir.name)
+
+    def configure_isolated_state() -> None:
+        global ROOT, STATE_DIR, PLAN_PATH, DECISIONS_PATH, RISKS_PATH, EVENTS_PATH, REVISIONS_PATH
+        ROOT = isolated_root
+        STATE_DIR = ROOT / ".deeplan"
+        PLAN_PATH = STATE_DIR / "plan.json"
+        DECISIONS_PATH = STATE_DIR / "decisions.jsonl"
+        RISKS_PATH = STATE_DIR / "risks.jsonl"
+        EVENTS_PATH = STATE_DIR / "events.jsonl"
+        REVISIONS_PATH = STATE_DIR / "revisions.jsonl"
+        _sync_store_paths()
+        deepplan_module.ROOT = ROOT
+        deepplan_module.STATE_DIR = STATE_DIR
+        deepplan_module.PLAN_PATH = PLAN_PATH
+        deepplan_module.DECISIONS_PATH = DECISIONS_PATH
+        deepplan_module.RISKS_PATH = RISKS_PATH
+        deepplan_module.EVENTS_PATH = EVENTS_PATH
+        deepplan_module.REVISIONS_PATH = REVISIONS_PATH
+        deepplan_module._sync_store_paths()
+        shutil.rmtree(STATE_DIR, ignore_errors=True)
+        ensure_state()
+        deepplan_module.ensure_state()
+
+    try:
+        report = run_manifest(transport, reset_state=configure_isolated_state)
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        if not report.get("ok", False):
+            raise SystemExit(1)
+    finally:
+        ROOT = original_root
+        STATE_DIR = original_state_dir
+        PLAN_PATH = original_plan_path
+        DECISIONS_PATH = original_decisions_path
+        RISKS_PATH = original_risks_path
+        EVENTS_PATH = original_events_path
+        REVISIONS_PATH = original_revisions_path
+        _sync_store_paths()
+        deepplan_module.ROOT = original_module_root
+        deepplan_module.STATE_DIR = original_module_state_dir
+        deepplan_module.PLAN_PATH = original_module_plan_path
+        deepplan_module.DECISIONS_PATH = original_module_decisions_path
+        deepplan_module.RISKS_PATH = original_module_risks_path
+        deepplan_module.EVENTS_PATH = original_module_events_path
+        deepplan_module.REVISIONS_PATH = original_module_revisions_path
+        deepplan_module._sync_store_paths()
+        tempdir.cleanup()
+
+
 def cmd_show(_: argparse.Namespace) -> None:
     plan = load_plan()
     summary = plan_summary(plan)
@@ -2739,6 +3179,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--apply", action="store_true")
     s.add_argument("--json", action="store_true")
     s.set_defaults(func=cmd_maintenance)
+
+    s = sub.add_parser("conformance")
+    s.add_argument("--base-url", type=str, default="")
+    s.add_argument("--in-process", action="store_true")
+    s.set_defaults(func=cmd_conformance)
 
     s = sub.add_parser("show")
     s.set_defaults(func=cmd_show)

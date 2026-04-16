@@ -8,6 +8,7 @@ from deepplan import (
     add_evidence,
     apply_replan_payload,
     build_reference_discovery_pack,
+    cycle_snapshot,
     get_revision,
     list_revisions,
     load_plan,
@@ -130,6 +131,57 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
                 "rejected": {"type": "array", "items": {"type": "string"}},
                 "apply": {"type": "boolean"},
             },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "capture_evidence_cycle",
+        "description": "Run an evidence append followed by replan and return the integrated planning cycle snapshot.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "expected_fingerprint": {"type": "string"},
+                "idempotency_key": {"type": "string"},
+                "history_limit": {"type": "integer"},
+                "evidence": {
+                    "type": "object",
+                    "properties": {
+                        "claim": {"type": "string"},
+                        "source": {"type": "string"},
+                        "confidence": {"type": "integer"},
+                        "axis": {"type": "string"},
+                        "date": {"type": "string"},
+                        "reference": {"type": "string"},
+                    },
+                    "required": ["claim"],
+                    "additionalProperties": False,
+                },
+                "replan": {
+                    "type": "object",
+                    "properties": {
+                        "evidence": {"type": "string"},
+                        "evidence_source": {"type": "string"},
+                        "evidence_confidence": {"type": "integer"},
+                        "evidence_axis": {"type": "string"},
+                        "evidence_date": {"type": "string"},
+                        "plan_task": {"type": "string"},
+                        "execution_task": {"type": "string"},
+                        "phase": {"type": "string"},
+                        "reference": {"type": "string"},
+                        "insight": {"type": "string"},
+                        "direction_insight": {"type": "string"},
+                        "market_insight": {"type": "string"},
+                        "timing_insight": {"type": "string"},
+                        "differentiation_insight": {"type": "string"},
+                        "monetization_insight": {"type": "string"},
+                        "constraint_insight": {"type": "string"},
+                        "risk_signal_insight": {"type": "string"},
+                        "evolution_insight": {"type": "string"},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            "required": ["evidence"],
             "additionalProperties": False,
         },
     },
@@ -266,6 +318,7 @@ TOOL_VALIDATORS = {
     "restore_revision": "validate_restore_payload",
     "preview_restore": "validate_preview_restore_payload",
     "run_reference_discovery": "validate_reference_discovery_payload",
+    "capture_evidence_cycle": "validate_capture_evidence_cycle_payload",
     "replan": "validate_replan_payload",
     "update_plan": "validate_update_payload",
     "add_evidence": "validate_evidence_payload",
@@ -275,6 +328,7 @@ TOOL_VALIDATORS = {
 MUTATION_TOOLS = {
     "restore_revision",
     "run_reference_discovery",
+    "capture_evidence_cycle",
     "replan",
     "update_plan",
     "add_evidence",
@@ -409,6 +463,34 @@ def validate_reference_discovery_payload(payload: Dict[str, Any]) -> None:
         raise ValueError("apply must be a boolean")
 
 
+def validate_capture_evidence_cycle_payload(payload: Dict[str, Any]) -> None:
+    ensure_object_payload(payload)
+    validate_expected_fingerprint(payload)
+    validate_idempotency_key(payload)
+    allowed = {"expected_fingerprint", "idempotency_key", "history_limit", "evidence", "replan"}
+    unknown = sorted(set(payload) - allowed)
+    if unknown:
+        raise ValueError(f"unknown capture_evidence_cycle fields: {', '.join(unknown)}")
+    if "history_limit" in payload and (not isinstance(payload["history_limit"], int) or isinstance(payload["history_limit"], bool)):
+        raise ValueError("history_limit must be an integer")
+    evidence_payload = payload.get("evidence")
+    if not isinstance(evidence_payload, dict):
+        raise ValueError("evidence is required")
+    validate_evidence_payload(evidence_payload)
+    if "expected_fingerprint" in evidence_payload:
+        raise ValueError("evidence.expected_fingerprint is not allowed")
+    if "idempotency_key" in evidence_payload:
+        raise ValueError("evidence.idempotency_key is not allowed")
+    replan_payload = payload.get("replan", {})
+    if not isinstance(replan_payload, dict):
+        raise ValueError("replan must be an object")
+    validate_replan_payload(replan_payload)
+    if "expected_fingerprint" in replan_payload:
+        raise ValueError("replan.expected_fingerprint is not allowed")
+    if "idempotency_key" in replan_payload:
+        raise ValueError("replan.idempotency_key is not allowed")
+
+
 def validate_hypothesis_payload(payload: Dict[str, Any]) -> None:
     ensure_object_payload(payload)
     validate_expected_fingerprint(payload)
@@ -518,6 +600,7 @@ def tool_schema_contract_report() -> Dict[str, Any]:
         "restore_revision",
         "preview_restore",
         "run_reference_discovery",
+        "capture_evidence_cycle",
         "replan",
         "update_plan",
         "add_evidence",
@@ -663,6 +746,55 @@ def execute_tool(name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
             response["fingerprint"] = plan_fingerprint(result)
             response["qa"] = qa_report(result)
         return enrich_tool_result(name, "reference_discovery", response)
+
+    if name == "capture_evidence_cycle":
+        validate_capture_evidence_cycle_payload(payload)
+        history_limit = int(payload.get("history_limit", 10))
+        before = cycle_snapshot(history_limit=history_limit)
+        cycle_key = str(payload.get("idempotency_key", "")).strip()
+        evidence_key = f"{cycle_key}:evidence" if cycle_key else ""
+        replan_key = f"{cycle_key}:replan" if cycle_key else ""
+
+        evidence_payload = dict(payload.get("evidence", {}) or {})
+        if payload.get("expected_fingerprint"):
+            evidence_payload["expected_fingerprint"] = payload.get("expected_fingerprint")
+        if evidence_key:
+            evidence_payload["idempotency_key"] = evidence_key
+        evidence_result = execute_tool("add_evidence", evidence_payload)
+
+        replan_payload = dict(payload.get("replan", {}) or {})
+        evidence_fingerprint = str(evidence_result.get("fingerprint", "")).strip()
+        if evidence_fingerprint:
+            replan_payload["expected_fingerprint"] = evidence_fingerprint
+        if replan_key:
+            replan_payload["idempotency_key"] = replan_key
+        replan_result = execute_tool("replan", replan_payload)
+
+        after = cycle_snapshot(history_limit=history_limit)
+        response = {
+            "operation": "capture_evidence_cycle",
+            "result_type": "planning_cycle",
+            "pre_fingerprint": before.get("fingerprint", ""),
+            "post_fingerprint": after.get("fingerprint", ""),
+            "fingerprint": after.get("fingerprint", ""),
+            "changed_fields": sorted(
+                key
+                for key in set(before.get("plan", {})) | set(after.get("plan", {}))
+                if before.get("plan", {}).get(key) != after.get("plan", {}).get(key)
+            ),
+            "qa_delta": int(after.get("qa", {}).get("score", 0)) - int(before.get("qa", {}).get("score", 0)),
+            "evidence_result": evidence_result,
+            "replan_result": replan_result,
+            "step_results": {
+                "add_evidence": evidence_result,
+                "replan": replan_result,
+            },
+            "pre_cycle": before,
+            "post_cycle": after,
+        }
+        if cycle_key:
+            response["idempotency_key"] = cycle_key
+        return enrich_tool_result(name, "planning_cycle", response)
 
     if name == "replan":
         validate_replan_payload(payload)
@@ -812,6 +944,7 @@ def slash_to_tool(command: str) -> Tuple[str, Dict[str, Any]]:
         "/deepplan": "update_plan",
         "/deepplan.plan": "update_plan",
         "/deepplan.replan": "replan",
+        "/deepplan.capture": "capture_evidence_cycle",
         "/deepplan.show": "get_plan",
         "/deepplan.history": "get_history",
         "/deepplan.restore": "restore_revision",
@@ -846,6 +979,8 @@ def natural_language_to_tool(text: str) -> Tuple[str, Dict[str, Any]]:
         return "get_history", {}
     if any(phrase in lowered for phrase in ["validate plan", "plan validation", "check plan structure"]):
         return "validate_plan", {}
+    if lowered.startswith("capture evidence cycle "):
+        return "capture_evidence_cycle", parse_assignment_tokens(shlex.split(stripped[len("capture evidence cycle ") :]))
     if lowered.startswith("replan "):
         return "replan", parse_assignment_tokens(shlex.split(stripped[len("replan ") :]))
     if lowered.startswith("reference discovery "):

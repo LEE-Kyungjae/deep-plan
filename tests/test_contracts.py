@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
-import io
 import json
+import os
+import shutil
+import subprocess
 import tempfile
 import unittest
+import threading
+from http.server import ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Optional
 
 import deepplan
+from deepplan_conformance import build_http_transport, build_inprocess_transport, load_case, load_manifest, run_case, run_manifest
 from deepplan_server import DeepPlanHandler
 
 
 CONTRACTS_DIR = Path(__file__).resolve().parent / "contracts"
-MANIFEST_PATH = CONTRACTS_DIR / "manifest.json"
+CODE_ROOT = Path(__file__).resolve().parent.parent
+TS_CONSUMER_PATH = CODE_ROOT / "deepplan_reference_consumer.ts"
 
 
 class DeepPlanStateIsolation:
@@ -55,117 +61,29 @@ class DeepPlanStateIsolation:
         self.tempdir.cleanup()
 
 
-def build_handler(method: str, path: str, body: bytes = b"", headers: Optional[Dict[str, str]] = None) -> DeepPlanHandler:
-    handler = DeepPlanHandler.__new__(DeepPlanHandler)
-    handler.command = method
-    handler.path = path
-    handler.headers = {"Content-Length": str(len(body)), **(headers or {})}
-    handler.rfile = io.BytesIO(body)
-    handler.wfile = io.BytesIO()
-    handler._status = None
-    handler._sent_headers = {}
-    handler.send_response = lambda status, message=None: setattr(handler, "_status", status)
-    handler.send_header = lambda key, value: handler._sent_headers.__setitem__(key, value)
-    handler.end_headers = lambda: None
-    return handler
+class DeepPlanHTTPServerIsolation:
+    def __init__(self) -> None:
+        self.server: Optional[ThreadingHTTPServer] = None
+        self.thread: Optional[threading.Thread] = None
+        self.base_url = ""
 
+    def __enter__(self):
+        try:
+            self.server = ThreadingHTTPServer(("127.0.0.1", 0), DeepPlanHandler)
+        except PermissionError as exc:
+            raise unittest.SkipTest(f"socket bind not permitted in this environment: {exc}") from exc
+        host, port = self.server.server_address
+        self.base_url = f"http://{host}:{port}"
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        return self
 
-def decode_response(handler: DeepPlanHandler) -> Dict[str, Any]:
-    payload = json.loads(handler.wfile.getvalue().decode("utf-8"))
-    return {
-        "status": handler._status,
-        "payload": payload,
-        "headers": handler._sent_headers,
-    }
-
-
-def run_request(method: str, path: str, body: Optional[Dict[str, Any]] = None, headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
-    raw_body = json.dumps(body).encode("utf-8") if body is not None else b""
-    handler = build_handler(method, path, body=raw_body, headers=headers)
-    if method == "GET":
-        handler.do_GET()
-    else:
-        handler.do_POST()
-    return decode_response(handler)
-
-
-def load_json_fixture(name: str) -> Dict[str, Any]:
-    return json.loads((CONTRACTS_DIR / name).read_text(encoding="utf-8"))
-
-
-def load_manifest() -> Dict[str, Any]:
-    return json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-
-
-def get_value(payload: Dict[str, Any], path: str) -> Any:
-    current: Any = payload
-    for part in path.split("."):
-        if isinstance(current, dict):
-            current = current[part]
-        elif isinstance(current, list):
-            current = current[int(part)]
-        else:
-            raise KeyError(path)
-    return current
-
-
-def resolve_reference(context: Dict[str, Dict[str, Any]], reference: str) -> Any:
-    alias, path = reference.split(".", 1)
-    return get_value(context[alias], path)
-
-
-def assert_contains_all(haystack: Iterable[Any], needles: Iterable[Any]) -> None:
-    haystack_values = list(haystack)
-    for needle in needles:
-        if needle not in haystack_values:
-            raise AssertionError(f"missing expected value: {needle!r}")
-
-
-def assert_contract_assertion(case_id: str, assertion: Dict[str, Any], context: Dict[str, Dict[str, Any]]) -> None:
-    target = context[assertion["target"]]
-    path = assertion["path"]
-    op = assertion["op"]
-
-    if op == "eq":
-        expected = resolve_reference(context, assertion["value_from"]) if "value_from" in assertion else assertion["value"]
-        assert get_value(target, path) == expected, f"{case_id}: {path}"
-        return
-    if op == "ne":
-        expected = resolve_reference(context, assertion["value_from"]) if "value_from" in assertion else assertion["value"]
-        assert get_value(target, path) != expected, f"{case_id}: {path}"
-        return
-    if op == "gt":
-        assert get_value(target, path) > assertion["value"], f"{case_id}: {path}"
-        return
-    if op == "len_eq":
-        assert len(get_value(target, path)) == assertion["value"], f"{case_id}: {path}"
-        return
-    if op == "non_empty":
-        value = get_value(target, path)
-        assert bool(value), f"{case_id}: {path}"
-        return
-    if op == "has_keys":
-        value = get_value(target, path)
-        assert isinstance(value, dict), f"{case_id}: {path} must be an object"
-        for key in assertion["value"]:
-            assert key in value, f"{case_id}: missing key {key!r} at {path}"
-        return
-    if op == "contains":
-        value = get_value(target, path)
-        assert isinstance(value, list), f"{case_id}: {path} must be a list"
-        assert_contains_all(value, assertion["value"])
-        return
-    if op == "etag_matches_payload_fingerprint":
-        etag = str(get_value(target, path))
-        fingerprint = str(get_value(target, assertion["fingerprint_path"]))
-        assert etag == f'"{fingerprint}"', f"{case_id}: {path} must match {assertion['fingerprint_path']}"
-        return
-    if op == "quoted_equals_value_from":
-        value_from = resolve_reference(context, assertion["value_from"])
-        assert str(get_value(target, path)) == f'"{value_from}"', f"{case_id}: {path}"
-        return
-
-    raise AssertionError(f"{case_id}: unsupported assertion op {op!r}")
+    def __exit__(self, exc_type, exc, tb):
+        if self.server is not None:
+            self.server.shutdown()
+            self.server.server_close()
+        if self.thread is not None:
+            self.thread.join(timeout=2)
 
 
 class ContractFixtureTests(unittest.TestCase):
@@ -181,79 +99,96 @@ class ContractFixtureTests(unittest.TestCase):
         ])
 
     def test_plan_envelope_contract(self):
-        case = load_json_fixture("plan-envelope.json")
+        case = load_case("plan-envelope.json")
         with DeepPlanStateIsolation():
             deepplan.ensure_state()
-            response = run_request("GET", "/plan")
+            report = run_case(build_inprocess_transport(), case)
 
-        context = {case["steps"][0]["capture"]: response}
-        for assertion in case["assertions"]:
-            assert_contract_assertion(case["id"], assertion, context)
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["id"], "plan-envelope")
 
     def test_etag_fingerprint_contract(self):
-        case = load_json_fixture("etag-fingerprint.json")
+        case = load_case("etag-fingerprint.json")
         with DeepPlanStateIsolation():
             deepplan.ensure_state()
-            before = run_request("GET", "/plan")
-            after = run_request(
-                "POST",
-                "/plan",
-                body=case["write_body"],
-                headers={"Content-Type": "application/json", "If-Match": before["headers"]["ETag"]},
-            )
+            report = run_case(build_inprocess_transport(), case)
 
-        context = {"before": before, "after": after}
-        for assertion in case["assertions"]:
-            assert_contract_assertion(case["id"], assertion, context)
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["id"], "etag-fingerprint")
 
     def test_stale_write_conflict_contract(self):
-        case = load_json_fixture("stale-write-conflict.json")
+        case = load_case("stale-write-conflict.json")
         with DeepPlanStateIsolation():
             deepplan.ensure_state()
-            baseline = run_request("GET", "/plan")
-            fresh = run_request(
-                "POST",
-                "/plan",
-                body=case["fresh_write_body"],
-                headers={"Content-Type": "application/json", "If-Match": baseline["headers"]["ETag"]},
-            )
-            stale = run_request(
-                "POST",
-                "/plan",
-                body=case["stale_write_body"],
-                headers={"Content-Type": "application/json", "If-Match": baseline["headers"]["ETag"]},
-            )
+            report = run_case(build_inprocess_transport(), case)
 
-        context = {"baseline": baseline, "fresh": fresh, "stale": stale}
-        for assertion in case["assertions"]:
-            assert_contract_assertion(case["id"], assertion, context)
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["id"], "stale-write-conflict")
 
     def test_restore_roundtrip_contract(self):
-        case = load_json_fixture("restore-roundtrip.json")
+        case = load_case("restore-roundtrip.json")
         with DeepPlanStateIsolation():
             deepplan.ensure_state()
-            deepplan.mutate_plan_state(lambda plan: plan.update(case["seed_plan_first"]), revision_source="contract_seed_first")
-            deepplan.mutate_plan_state(lambda plan: plan.update(case["seed_plan_second"]), revision_source="contract_seed_second")
-            current = run_request("GET", "/plan")
-            preview = run_request("POST", "/restore/preview", body={"previous": True})
-            restored = run_request(
-                "POST",
-                "/restore",
-                body={"previous": True},
-                headers={"Content-Type": "application/json", "If-Match": current["payload"]["fingerprint"]},
-            )
+            report = run_case(build_inprocess_transport(), case)
 
-        context = {"current": current, "preview": preview, "restored": restored}
-        for assertion in case["assertions"]:
-            assert_contract_assertion(case["id"], assertion, context)
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["id"], "restore-roundtrip")
 
     def test_idempotent_evidence_dedupe_contract(self):
-        case = load_json_fixture("idempotent-evidence-dedupe.json")
+        case = load_case("idempotent-evidence-dedupe.json")
         with DeepPlanStateIsolation():
             deepplan.ensure_state()
-            first = run_request("POST", "/evidence", body=case["first_evidence_body"], headers={"Content-Type": "application/json"})
-            second = run_request("POST", "/evidence", body=case["first_evidence_body"], headers={"Content-Type": "application/json"})
+            report = run_case(build_inprocess_transport(), case)
 
-        context = {"first": first, "second": second}
-        for assertion in case["assertions"]:
-            assert_contract_assertion(case["id"], assertion, context)
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["id"], "idempotent-evidence-dedupe")
+
+    def test_runner_returns_machine_readable_json_report(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            report = run_manifest(
+                build_inprocess_transport(),
+                reset_state=lambda: (shutil.rmtree(deepplan.STATE_DIR, ignore_errors=True), deepplan.ensure_state()),
+            )
+            encoded = json.dumps(report, sort_keys=True)
+
+        parsed = json.loads(encoded)
+        self.assertTrue(parsed["ok"])
+        self.assertEqual(parsed["passed"], parsed["case_count"])
+
+    def test_runner_supports_external_http_base_url(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            with DeepPlanHTTPServerIsolation() as server:
+                transport = build_http_transport(server.base_url)
+                report = run_manifest(transport)
+
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["passed"], report["case_count"])
+
+    def test_node_ts_reference_consumer_smoke_against_http_surface(self):
+        if not shutil.which("node"):
+            raise unittest.SkipTest("node is not available")
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            with DeepPlanHTTPServerIsolation() as server:
+                completed = subprocess.run(
+                    ["node", str(TS_CONSUMER_PATH), "--base-url", server.base_url, "--mode", "smoke"],
+                    cwd=str(CODE_ROOT),
+                    capture_output=True,
+                    text=True,
+                    env={**os.environ, "NO_COLOR": "1"},
+                    check=False,
+                )
+
+        if completed.returncode != 0:
+            self.fail(f"node ts consumer failed: {completed.stderr or completed.stdout}")
+        report = json.loads(completed.stdout)
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["consumer"], "deepplan_reference_consumer")
+        self.assertEqual(report["runtime"], "node_typescript_strip")
+        check_names = [item["name"] for item in report["checks"]]
+        self.assertEqual(
+            check_names,
+            ["plan_envelope", "etag_write", "cycle_snapshot", "stale_conflict", "contracts_catalog"],
+        )

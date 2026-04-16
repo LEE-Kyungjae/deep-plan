@@ -1,0 +1,475 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DeepPlan</title>
+  <style>
+    :root {
+      --bg: #f4efe5;
+      --bg-strong: #e7dcc8;
+      --panel: rgba(255, 251, 245, 0.78);
+      --text: #1d1b18;
+      --muted: #5e584f;
+      --accent: #0f766e;
+      --accent-2: #9a3412;
+      --border: rgba(29, 27, 24, 0.12);
+      --shadow: 0 20px 60px rgba(46, 38, 28, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(15, 118, 110, 0.16), transparent 36%),
+        radial-gradient(circle at 85% 15%, rgba(154, 52, 18, 0.14), transparent 26%),
+        linear-gradient(180deg, #f7f1e7 0%, var(--bg) 48%, #efe5d4 100%);
+      line-height: 1.45;
+    }
+
+    a {
+      color: inherit;
+    }
+
+    .page {
+      width: min(1120px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 32px 0 80px;
+    }
+
+    .nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 48px;
+    }
+
+    .brand {
+      font-size: 1.1rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 18px;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 28px;
+      align-items: stretch;
+      margin-bottom: 28px;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 28px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(14px);
+    }
+
+    .hero-copy {
+      padding: 44px;
+    }
+
+    .eyebrow {
+      display: inline-block;
+      margin-bottom: 14px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: rgba(15, 118, 110, 0.1);
+      color: var(--accent);
+      font-size: 0.82rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    h1, h2, h3, p {
+      margin: 0;
+    }
+
+    h1 {
+      font-size: clamp(2.7rem, 6vw, 5.2rem);
+      line-height: 0.98;
+      letter-spacing: -0.04em;
+      max-width: 11ch;
+      margin-bottom: 18px;
+    }
+
+    .hero-copy p {
+      max-width: 34rem;
+      color: var(--muted);
+      font-size: 1.08rem;
+    }
+
+    .cta-row {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-top: 26px;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 12px 18px;
+      border-radius: 999px;
+      border: 1px solid transparent;
+      text-decoration: none;
+      font-size: 0.96rem;
+    }
+
+    .button-primary {
+      background: var(--text);
+      color: #f8f1e8;
+    }
+
+    .button-secondary {
+      border-color: var(--border);
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.45);
+    }
+
+    .hero-proof {
+      padding: 28px;
+      display: grid;
+      gap: 14px;
+      background:
+        linear-gradient(180deg, rgba(15, 118, 110, 0.08), transparent 38%),
+        var(--panel);
+    }
+
+    .proof-label {
+      color: var(--muted);
+      font-size: 0.88rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .proof-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .proof-item {
+      padding: 14px 16px;
+      background: rgba(255, 255, 255, 0.68);
+      border-radius: 18px;
+      border: 1px solid rgba(29, 27, 24, 0.08);
+    }
+
+    .proof-item strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 0.95rem;
+    }
+
+    .proof-item span {
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    .band {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+      margin: 20px 0 56px;
+    }
+
+    .band .card {
+      padding: 20px;
+      min-height: 132px;
+    }
+
+    .section {
+      margin-top: 56px;
+    }
+
+    .section-header {
+      max-width: 42rem;
+      margin-bottom: 22px;
+    }
+
+    .section-header h2 {
+      font-size: clamp(2rem, 4vw, 3.1rem);
+      line-height: 1.02;
+      letter-spacing: -0.03em;
+      margin-bottom: 10px;
+    }
+
+    .section-header p {
+      color: var(--muted);
+      font-size: 1rem;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+    }
+
+    .stack {
+      display: grid;
+      gap: 14px;
+    }
+
+    .panel {
+      padding: 26px;
+    }
+
+    .panel h3 {
+      font-size: 1.2rem;
+      margin-bottom: 10px;
+    }
+
+    .panel p,
+    .panel li {
+      color: var(--muted);
+    }
+
+    ul {
+      margin: 0;
+      padding-left: 18px;
+    }
+
+    li + li {
+      margin-top: 8px;
+    }
+
+    .outcome-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .outcome-item {
+      padding: 16px;
+      border-radius: 20px;
+      background: rgba(255, 255, 255, 0.62);
+      border: 1px solid rgba(29, 27, 24, 0.08);
+      font-size: 0.98rem;
+    }
+
+    .cta-panel {
+      margin-top: 64px;
+      padding: 32px;
+      background:
+        linear-gradient(135deg, rgba(15, 118, 110, 0.12), rgba(154, 52, 18, 0.12)),
+        var(--panel);
+    }
+
+    .cta-panel p {
+      color: var(--muted);
+      max-width: 38rem;
+      margin-top: 10px;
+      margin-bottom: 22px;
+    }
+
+    @media (max-width: 860px) {
+      .hero,
+      .band,
+      .grid-2,
+      .outcome-list {
+        grid-template-columns: 1fr;
+      }
+
+      .page {
+        width: min(100% - 20px, 1120px);
+        padding-top: 20px;
+      }
+
+      .hero-copy,
+      .hero-proof,
+      .panel,
+      .cta-panel {
+        padding: 22px;
+      }
+
+      .nav {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      h1 {
+        max-width: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="nav">
+      <div class="brand">DeepPlan</div>
+      <div class="nav-links">
+        <span>Plan-only</span>
+        <span>Local-first</span>
+        <span>Versioned direction</span>
+      </div>
+    </div>
+
+    <section class="hero">
+      <div class="card hero-copy">
+        <div class="eyebrow">Planning State For Builders</div>
+        <h1>Decide what matters before AI builds it.</h1>
+        <p>DeepPlan helps builders working with AI choose a direction, track the evidence, and replan before execution hardens the wrong path.</p>
+        <div class="cta-row">
+          <a class="button button-primary" href="../README.md">Read README</a>
+          <a class="button button-secondary" href="./landing-copy.md">View messaging</a>
+        </div>
+      </div>
+
+      <div class="card hero-proof">
+        <div class="proof-label">One Loop Should Produce</div>
+        <div class="proof-list">
+          <div class="proof-item">
+            <strong>One chosen direction</strong>
+            <span>A current plan with a success metric and deadline.</span>
+          </div>
+          <div class="proof-item">
+            <strong>Rejected alternatives</strong>
+            <span>Weak paths get named and dropped early.</span>
+          </div>
+          <div class="proof-item">
+            <strong>Replan trigger</strong>
+            <span>Failure signals and the next evidence to collect are explicit.</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="band">
+      <div class="card">
+        <h3>For people who ship fast</h3>
+        <p>AI lowers execution cost, which makes direction mistakes more expensive.</p>
+      </div>
+      <div class="card">
+        <h3>Not another note app</h3>
+        <p>DeepPlan is not a workflow engine, PM board, or execution runtime.</p>
+      </div>
+      <div class="card">
+        <h3>Local and revisioned</h3>
+        <p>Keep planning state in your repo with evidence, hypotheses, revisions, and restore points.</p>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-header">
+        <h2>Execution got cheaper. Direction did not.</h2>
+        <p>Teams can generate code, tasks, and workflows fast. The harder problem is still deciding what to build first, what evidence supports the choice, and when the plan should change.</p>
+      </div>
+      <div class="grid-2">
+        <div class="card panel">
+          <h3>Use DeepPlan when</h3>
+          <ul>
+            <li>You have ideas but do not know what to validate first.</li>
+            <li>AI is helping you build fast, but direction keeps drifting.</li>
+            <li>You need a clear reason to choose one path and kill others.</li>
+            <li>You want evidence, failure criteria, and replanning history in one place.</li>
+          </ul>
+        </div>
+        <div class="card panel">
+          <h3>DeepPlan keeps</h3>
+          <ul>
+            <li>one current plan</li>
+            <li>explicit evidence and hypotheses</li>
+            <li>revision history</li>
+            <li>restore points</li>
+            <li>a defined moment to replan</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-header">
+        <h2>Planning state, not execution sprawl.</h2>
+        <p>DeepPlan is plan-only by design. It sits below your runtime and above your execution work.</p>
+      </div>
+      <div class="grid-2">
+        <div class="card panel">
+          <h3>DeepPlan is</h3>
+          <ul>
+            <li>a versioned planning state</li>
+            <li>an evidence-backed decision loop</li>
+            <li>a local system for review, replan, and restore</li>
+          </ul>
+        </div>
+        <div class="card panel">
+          <h3>DeepPlan is not</h3>
+          <ul>
+            <li>a note-taking app</li>
+            <li>a generic PM tool</li>
+            <li>an execution agent runtime</li>
+            <li>a workflow orchestrator</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-header">
+        <h2>One loop should leave you with a sharper decision.</h2>
+        <p>DeepPlan is strongest when a short planning cycle ends with a clearer call than you had before you started.</p>
+      </div>
+      <div class="card panel">
+        <div class="outcome-list">
+          <div class="outcome-item">One chosen direction</div>
+          <div class="outcome-item">Rejected alternatives</div>
+          <div class="outcome-item">A success metric and deadline</div>
+          <div class="outcome-item">Explicit failure signals</div>
+          <div class="outcome-item">The next evidence to collect</div>
+          <div class="outcome-item">A clear replan point</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-header">
+        <h2>Built for early direction work.</h2>
+        <p>Best fit for solo builders using AI, founders exploring product direction, and 0-&gt;1 teams running repeated experiments.</p>
+      </div>
+      <div class="stack">
+        <div class="card panel">
+          <h3>Strong fit</h3>
+          <ul>
+            <li>Solo builders working with AI</li>
+            <li>Early-stage founders</li>
+            <li>Developers in 0-&gt;1 exploration</li>
+            <li>Small teams running many direction changes</li>
+          </ul>
+        </div>
+        <div class="card panel">
+          <h3>Weaker fit</h3>
+          <ul>
+            <li>Teams that mainly need task tracking</li>
+            <li>Execution-heavy automation pipelines</li>
+            <li>Organizations already centered on a rigid PM stack</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="card cta-panel">
+      <h2>Version your direction, not just your code.</h2>
+      <p>DeepPlan gives you a versioned planning state so faster execution does not lock in the wrong strategy.</p>
+      <div class="cta-row">
+        <a class="button button-primary" href="../README.md">Start with the README</a>
+        <a class="button button-secondary" href="./integration-agentscope.md">See integration guide</a>
+      </div>
+    </section>
+  </div>
+</body>
+</html>
