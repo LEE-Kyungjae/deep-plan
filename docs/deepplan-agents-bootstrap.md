@@ -12,6 +12,8 @@ Recommended split:
 - `deep-plan`: planning state, QA, revisions, restore, planning memory
 - `deepplan-agents`: orchestration, agent roles, runtime coordination, host-side event model
 
+For a proposed skill model on top of that split, see [deepplan-agents-skills.md](/Users/ze/work/deepplan/docs/deepplan-agents-skills.md).
+
 DeepPlan should remain `plan-only`.
 The integration repo should own execution orchestration.
 

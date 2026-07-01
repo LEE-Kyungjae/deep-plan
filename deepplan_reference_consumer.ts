@@ -45,6 +45,32 @@ type ContractsEnvelope = {
   [key: string]: unknown;
 };
 
+type ToolCatalogEnvelope = {
+  ok: boolean;
+  result_type: "tool_catalog";
+  catalog: {
+    authoritative: boolean;
+    execute_endpoint: string;
+    tool_count: number;
+  };
+  tools: Array<{
+    name: string;
+    kind: "read" | "mutation";
+    execute_via: {
+      generic: string;
+      legacy_wrapper: string;
+    };
+    [key: string]: unknown;
+  }>;
+  [key: string]: unknown;
+};
+
+type ToolExecuteEnvelope = {
+  tool: string;
+  input: Record<string, unknown>;
+  result: Record<string, unknown>;
+};
+
 type ErrorEnvelope = {
   error: string;
   type: string;
@@ -101,6 +127,11 @@ class DeepPlanTsConsumer {
     return payload;
   }
 
+  async getTools(): Promise<ToolCatalogEnvelope> {
+    const { payload } = await this.request<ToolCatalogEnvelope>("/tools");
+    return payload;
+  }
+
   async updatePlan(payload: Record<string, unknown>, etag: string): Promise<PlanEnvelope> {
     const { payload: result } = await this.request<PlanEnvelope>("/plan", {
       method: "POST",
@@ -111,6 +142,25 @@ class DeepPlanTsConsumer {
       body: JSON.stringify(payload),
     });
     return result;
+  }
+
+  async executeTool(
+    tool: string,
+    input: Record<string, unknown>,
+    etag = "",
+  ): Promise<ToolExecuteEnvelope> {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (etag) {
+      headers["If-Match"] = etag;
+    }
+    const { payload } = await this.request<ToolExecuteEnvelope>("/tools/execute", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ tool, input }),
+    });
+    return payload;
   }
 
   async expectConflict(
@@ -178,6 +228,17 @@ class DeepPlanTsConsumer {
       name: "contracts_catalog",
       ok: contracts.result_type === "contracts" && capabilityNames.includes("plan.write"),
       capability_count: capabilityNames.length,
+    });
+
+    const tools = await this.getTools();
+    checks.push({
+      name: "tool_catalog",
+      ok:
+        tools.result_type === "tool_catalog" &&
+        tools.catalog.authoritative === true &&
+        tools.catalog.execute_endpoint === "/tools/execute" &&
+        tools.tools.some((tool) => tool.name === "request_review"),
+      tool_count: tools.catalog.tool_count,
     });
 
     return {

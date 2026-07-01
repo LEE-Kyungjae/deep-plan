@@ -198,6 +198,351 @@ class DeepPlanServerTests(unittest.TestCase):
         self.assertEqual(payload["revisions"][0]["source"], "update_plan")
         self.assertIn("metadata", payload["revisions"][0])
 
+    def test_get_reviews_filters_direct_http_endpoint(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            seed = build_handler(
+                "POST",
+                "/plan",
+                body=json.dumps({"goal": "reviews endpoint", "success_metric": "Reach 2 pilots", "deadline": "2026-05-01"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            seed.do_POST()
+            _seed_status, _seed_payload, seed_headers = decode_response(seed)
+
+            request = build_handler(
+                "POST",
+                "/tools/execute",
+                body=json.dumps(
+                    {
+                        "tool": "request_review",
+                        "input": {
+                            "scope": "plan",
+                            "reason": "Owner needs to approve the next planning branch.",
+                            "requested_by": "deepplan-server-test",
+                            "priority": "high",
+                            "assigned_to": "owner",
+                        },
+                    }
+                ).encode("utf-8"),
+                headers={"Content-Type": "application/json", "If-Match": seed_headers["ETag"]},
+            )
+            request.do_POST()
+
+            handler = build_handler("GET", "/reviews?status=open&assigned_to=owner&limit=5")
+            handler.do_GET()
+            status, payload, _headers = decode_response(handler)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["tool_name"], "list_reviews")
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(payload["reviews"][0]["priority"], "high")
+        self.assertEqual(payload["reviews"][0]["assigned_to"], "owner")
+
+    def test_get_reviews_supports_priority_sorting(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            seed = build_handler(
+                "POST",
+                "/plan",
+                body=json.dumps({"goal": "reviews sorting endpoint", "success_metric": "Reach 2 pilots", "deadline": "2026-05-01"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            seed.do_POST()
+            _seed_status, _seed_payload, seed_headers = decode_response(seed)
+
+            low = build_handler(
+                "POST",
+                "/tools/execute",
+                body=json.dumps(
+                    {
+                        "tool": "request_review",
+                        "input": {
+                            "scope": "plan",
+                            "reason": "Low priority queue item.",
+                            "requested_by": "deepplan-server-test",
+                            "priority": "low",
+                            "request_id": "review-low",
+                        },
+                    }
+                ).encode("utf-8"),
+                headers={"Content-Type": "application/json", "If-Match": seed_headers["ETag"]},
+            )
+            low.do_POST()
+            _low_status, _low_payload, low_headers = decode_response(low)
+
+            high = build_handler(
+                "POST",
+                "/tools/execute",
+                body=json.dumps(
+                    {
+                        "tool": "request_review",
+                        "input": {
+                            "scope": "plan",
+                            "reason": "High priority queue item.",
+                            "requested_by": "deepplan-server-test",
+                            "priority": "high",
+                            "request_id": "review-high",
+                        },
+                    }
+                ).encode("utf-8"),
+                headers={"Content-Type": "application/json", "If-Match": low_headers["ETag"]},
+            )
+            high.do_POST()
+
+            handler = build_handler("GET", "/reviews?sort_by=priority&order=desc&limit=5")
+            handler.do_GET()
+            status, payload, _headers = decode_response(handler)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["filters"]["sort_by"], "priority")
+        self.assertEqual(payload["filters"]["order"], "desc")
+        self.assertEqual([item["id"] for item in payload["reviews"][:2]], ["review-high", "review-low"])
+
+    def test_get_reviews_supports_stale_after_sorting_and_missing_deadlines_last(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            seed = build_handler(
+                "POST",
+                "/plan",
+                body=json.dumps({"goal": "reviews stale sorting endpoint", "success_metric": "Reach 2 pilots", "deadline": "2026-05-01"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            seed.do_POST()
+            _seed_status, _seed_payload, seed_headers = decode_response(seed)
+
+            late = build_handler(
+                "POST",
+                "/tools/execute",
+                body=json.dumps(
+                    {
+                        "tool": "request_review",
+                        "input": {
+                            "scope": "plan",
+                            "reason": "Later deadline queue item.",
+                            "requested_by": "deepplan-server-test",
+                            "request_id": "review-late",
+                            "stale_after": "2026-05-03T09:00:00Z",
+                        },
+                    }
+                ).encode("utf-8"),
+                headers={"Content-Type": "application/json", "If-Match": seed_headers["ETag"]},
+            )
+            late.do_POST()
+            _late_status, _late_payload, late_headers = decode_response(late)
+
+            soon = build_handler(
+                "POST",
+                "/tools/execute",
+                body=json.dumps(
+                    {
+                        "tool": "request_review",
+                        "input": {
+                            "scope": "plan",
+                            "reason": "Soon deadline queue item.",
+                            "requested_by": "deepplan-server-test",
+                            "request_id": "review-soon",
+                            "stale_after": "2026-04-26T09:00:00Z",
+                        },
+                    }
+                ).encode("utf-8"),
+                headers={"Content-Type": "application/json", "If-Match": late_headers["ETag"]},
+            )
+            soon.do_POST()
+            _soon_status, _soon_payload, soon_headers = decode_response(soon)
+
+            no_deadline = build_handler(
+                "POST",
+                "/tools/execute",
+                body=json.dumps(
+                    {
+                        "tool": "request_review",
+                        "input": {
+                            "scope": "plan",
+                            "reason": "No deadline queue item.",
+                            "requested_by": "deepplan-server-test",
+                            "request_id": "review-none",
+                        },
+                    }
+                ).encode("utf-8"),
+                headers={"Content-Type": "application/json", "If-Match": soon_headers["ETag"]},
+            )
+            no_deadline.do_POST()
+
+            handler = build_handler("GET", "/reviews?sort_by=stale_after&order=asc&limit=5")
+            handler.do_GET()
+            status, payload, _headers = decode_response(handler)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["filters"]["sort_by"], "stale_after")
+        self.assertEqual(payload["filters"]["order"], "asc")
+        self.assertEqual([item["id"] for item in payload["reviews"][:3]], ["review-soon", "review-late", "review-none"])
+
+    def test_get_reviews_inbox_applies_open_priority_desc_preset(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            seed = build_handler(
+                "POST",
+                "/plan",
+                body=json.dumps({"goal": "reviews inbox endpoint", "success_metric": "Reach 2 pilots", "deadline": "2026-05-01"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            seed.do_POST()
+            _seed_status, _seed_payload, seed_headers = decode_response(seed)
+
+            open_low = build_handler(
+                "POST",
+                "/tools/execute",
+                body=json.dumps(
+                    {
+                        "tool": "request_review",
+                        "input": {
+                            "scope": "plan",
+                            "reason": "Low priority inbox item.",
+                            "requested_by": "deepplan-server-test",
+                            "priority": "low",
+                            "assigned_to": "owner",
+                            "stale_after": "2026-05-03T09:00:00Z",
+                            "sla_bucket": "72h",
+                            "request_id": "review-open-low",
+                        },
+                    }
+                ).encode("utf-8"),
+                headers={"Content-Type": "application/json", "If-Match": seed_headers["ETag"]},
+            )
+            open_low.do_POST()
+            _open_low_status, _open_low_payload, open_low_headers = decode_response(open_low)
+
+            open_high = build_handler(
+                "POST",
+                "/tools/execute",
+                body=json.dumps(
+                    {
+                        "tool": "request_review",
+                        "input": {
+                            "scope": "plan",
+                            "reason": "High priority inbox item.",
+                            "requested_by": "deepplan-server-test",
+                            "priority": "high",
+                            "assigned_to": "owner",
+                            "stale_after": "2026-04-26T09:00:00Z",
+                            "sla_bucket": "4h",
+                            "request_id": "review-open-high",
+                        },
+                    }
+                ).encode("utf-8"),
+                headers={"Content-Type": "application/json", "If-Match": open_low_headers["ETag"]},
+            )
+            open_high.do_POST()
+            _open_high_status, _open_high_payload, open_high_headers = decode_response(open_high)
+
+            closed = build_handler(
+                "POST",
+                "/tools/execute",
+                body=json.dumps(
+                    {
+                        "tool": "request_review",
+                        "input": {
+                            "scope": "plan",
+                            "reason": "This item should be filtered because it is closed.",
+                            "requested_by": "deepplan-server-test",
+                            "priority": "critical",
+                            "assigned_to": "owner",
+                            "request_id": "review-closed",
+                        },
+                    }
+                ).encode("utf-8"),
+                headers={"Content-Type": "application/json", "If-Match": open_high_headers["ETag"]},
+            )
+            closed.do_POST()
+            _closed_status, _closed_payload, closed_headers = decode_response(closed)
+
+            resolve = build_handler(
+                "POST",
+                "/tools/execute",
+                body=json.dumps(
+                    {
+                        "tool": "resolve_review",
+                        "input": {
+                            "request_id": "review-closed",
+                            "status": "resolved",
+                            "resolution": "Already handled.",
+                        },
+                    }
+                ).encode("utf-8"),
+                headers={"Content-Type": "application/json", "If-Match": closed_headers["ETag"]},
+            )
+            resolve.do_POST()
+
+            handler = build_handler("GET", "/reviews/inbox?assignee=owner&limit=5")
+            handler.do_GET()
+            status, payload, _headers = decode_response(handler)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["tool_name"], "list_reviews")
+        self.assertEqual(payload["filters"]["status"], "open")
+        self.assertEqual(payload["filters"]["assigned_to"], "owner")
+        self.assertEqual(payload["filters"]["sort_by"], "priority")
+        self.assertEqual(payload["filters"]["order"], "desc")
+        self.assertEqual([item["id"] for item in payload["reviews"]], ["review-open-high", "review-open-low"])
+        self.assertEqual(payload["reviews"][0]["stale_after"], "2026-04-26T09:00:00Z")
+        self.assertEqual(payload["reviews"][0]["sla_bucket"], "4h")
+
+    def test_get_review_detail_and_post_review_update_direct_http_endpoint(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            seed = build_handler(
+                "POST",
+                "/plan",
+                body=json.dumps({"goal": "review detail endpoint", "success_metric": "Reach 2 pilots", "deadline": "2026-05-01"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            seed.do_POST()
+            _seed_status, _seed_payload, seed_headers = decode_response(seed)
+
+            request = build_handler(
+                "POST",
+                "/tools/execute",
+                body=json.dumps(
+                    {
+                        "tool": "request_review",
+                        "input": {
+                            "scope": "plan",
+                            "reason": "Owner needs to triage the review queue.",
+                            "requested_by": "deepplan-server-test",
+                        },
+                    }
+                ).encode("utf-8"),
+                headers={"Content-Type": "application/json", "If-Match": seed_headers["ETag"]},
+            )
+            request.do_POST()
+            _request_status, request_payload, request_headers = decode_response(request)
+            request_id = request_payload["result"]["review_request"]["id"]
+
+            detail = build_handler("GET", f"/reviews/{request_id}")
+            detail.do_GET()
+            detail_status, detail_payload, _detail_headers = decode_response(detail)
+
+            update = build_handler(
+                "POST",
+                f"/reviews/{request_id}",
+                body=json.dumps({"priority": "high", "assigned_to": "reviewer", "stale_after": "2026-05-02T09:00:00Z", "sla_bucket": "24h"}).encode("utf-8"),
+                headers={"Content-Type": "application/json", "If-Match": request_headers["ETag"]},
+            )
+            update.do_POST()
+            update_status, update_payload, update_headers = decode_response(update)
+
+        self.assertEqual(detail_status, 200)
+        self.assertEqual(detail_payload["tool_name"], "get_review")
+        self.assertEqual(detail_payload["review"]["id"], request_id)
+        self.assertEqual(update_status, 200)
+        self.assertEqual(update_payload["tool_name"], "update_review")
+        self.assertEqual(update_payload["review_request"]["priority"], "high")
+        self.assertEqual(update_payload["review_request"]["assigned_to"], "reviewer")
+        self.assertEqual(update_payload["review_request"]["stale_after"], "2026-05-02T09:00:00Z")
+        self.assertEqual(update_payload["review_request"]["sla_bucket"], "24h")
+        self.assertEqual(update_headers.get("ETag"), f'"{update_payload["fingerprint"]}"')
+
     def test_get_health_returns_storage_diagnostics(self):
         with DeepPlanStateIsolation():
             deepplan.ensure_state()
@@ -281,6 +626,230 @@ class DeepPlanServerTests(unittest.TestCase):
         self.assertEqual(payload["history_limit"], 1)
         self.assertEqual(len(payload["history"]), 1)
         self.assertEqual(headers.get("ETag"), f'"{payload["fingerprint"]}"')
+
+    def test_get_tools_returns_authoritative_catalog_metadata(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            handler = build_handler("GET", "/tools")
+            handler.do_GET()
+            status, payload, _headers = decode_response(handler)
+
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["result_type"], "tool_catalog")
+        self.assertEqual(payload["contract_version"], deepplan.CONTRACT_VERSION)
+        self.assertEqual(payload["implementation_version"], deepplan.IMPLEMENTATION_VERSION)
+        self.assertTrue(payload["catalog"]["authoritative"])
+        self.assertEqual(payload["catalog"]["execute_endpoint"], "/tools/execute")
+        self.assertEqual(payload["catalog"]["legacy_execute_endpoint_template"], "/tools/{tool_name}")
+        self.assertGreater(payload["catalog"]["tool_count"], 0)
+        self.assertEqual(len(payload["tools"]), payload["catalog"]["tool_count"])
+        update_plan = next(item for item in payload["tools"] if item["name"] == "update_plan")
+        self.assertEqual(update_plan["kind"], "mutation")
+        self.assertEqual(update_plan["execute_via"]["generic"], "/tools/execute")
+        self.assertEqual(update_plan["execute_via"]["legacy_wrapper"], "/tools/update_plan")
+
+    def test_get_tool_detail_returns_single_tool_descriptor(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            handler = build_handler("GET", "/tools/get_plan")
+            handler.do_GET()
+            status, payload, _headers = decode_response(handler)
+
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["result_type"], "tool_detail")
+        self.assertEqual(payload["tool"]["name"], "get_plan")
+        self.assertEqual(payload["tool"]["kind"], "read")
+        self.assertEqual(payload["tool"]["execute_via"]["legacy_wrapper"], "/tools/get_plan")
+
+    def test_post_tools_execute_runs_generic_endpoint_without_breaking_legacy_wrapper(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            generic = build_handler(
+                "POST",
+                "/tools/execute",
+                body=json.dumps({"tool": "update_plan", "input": {"goal": "generic execute"}}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            generic.do_POST()
+            generic_status, generic_payload, generic_headers = decode_response(generic)
+
+            legacy = build_handler(
+                "POST",
+                "/tools/update_plan",
+                body=json.dumps({"goal": "legacy wrapper"}).encode("utf-8"),
+                headers={"Content-Type": "application/json", "If-Match": generic_headers["ETag"]},
+            )
+            legacy.do_POST()
+            legacy_status, legacy_payload, legacy_headers = decode_response(legacy)
+
+        self.assertEqual(generic_status, 200)
+        self.assertEqual(generic_payload["tool"], "update_plan")
+        self.assertEqual(generic_payload["input"]["goal"], "generic execute")
+        self.assertEqual(generic_payload["result"]["plan"]["goal"], "generic execute")
+        self.assertEqual(generic_headers.get("ETag"), f'"{generic_payload["result"]["fingerprint"]}"')
+        self.assertEqual(legacy_status, 200)
+        self.assertEqual(legacy_payload["tool"], "update_plan")
+        self.assertEqual(legacy_payload["input"]["goal"], "legacy wrapper")
+        self.assertEqual(legacy_payload["input"]["expected_fingerprint"], generic_payload["result"]["fingerprint"])
+        self.assertEqual(legacy_payload["result"]["plan"]["goal"], "legacy wrapper")
+        self.assertEqual(legacy_headers.get("ETag"), f'"{legacy_payload["result"]["fingerprint"]}"')
+
+    def test_post_tools_execute_can_request_human_review(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            seed = build_handler(
+                "POST",
+                "/plan",
+                body=json.dumps({"goal": "review seed", "success_metric": "Reach 2 pilots", "deadline": "2026-05-01"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            seed.do_POST()
+            _seed_status, seed_payload, seed_headers = decode_response(seed)
+
+            handler = build_handler(
+                "POST",
+                "/tools/execute",
+                body=json.dumps(
+                    {
+                        "tool": "request_review",
+                        "input": {
+                            "scope": "plan",
+                            "reason": "Owner needs to approve the next planning branch.",
+                            "requested_by": "deepplan-server-test",
+                            "related_references": ["paperclip"],
+                        },
+                    }
+                ).encode("utf-8"),
+                headers={"Content-Type": "application/json", "If-Match": seed_headers["ETag"]},
+            )
+            handler.do_POST()
+            status, payload, response_headers = decode_response(handler)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["tool"], "request_review")
+        self.assertEqual(payload["input"]["expected_fingerprint"], seed_payload["fingerprint"])
+        self.assertEqual(payload["result"]["review_request"]["scope"], "plan")
+        self.assertEqual(payload["result"]["plan"]["human_escalations"][0]["requested_by"], "deepplan-server-test")
+        self.assertEqual(response_headers.get("ETag"), f'"{payload["result"]["fingerprint"]}"')
+
+    def test_post_tools_execute_can_resolve_human_review(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            seed = build_handler(
+                "POST",
+                "/plan",
+                body=json.dumps({"goal": "review resolve seed", "success_metric": "Reach 2 pilots", "deadline": "2026-05-01"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            seed.do_POST()
+            _seed_status, _seed_payload, seed_headers = decode_response(seed)
+
+            request = build_handler(
+                "POST",
+                "/tools/execute",
+                body=json.dumps(
+                    {
+                        "tool": "request_review",
+                        "input": {
+                            "scope": "plan",
+                            "reason": "Owner needs to approve the next planning branch.",
+                            "requested_by": "deepplan-server-test",
+                        },
+                    }
+                ).encode("utf-8"),
+                headers={"Content-Type": "application/json", "If-Match": seed_headers["ETag"]},
+            )
+            request.do_POST()
+            _request_status, request_payload, request_headers = decode_response(request)
+
+            resolve = build_handler(
+                "POST",
+                "/tools/execute",
+                body=json.dumps(
+                    {
+                        "tool": "resolve_review",
+                        "input": {
+                            "request_id": request_payload["result"]["review_request"]["id"],
+                            "status": "resolved",
+                            "resolution": "Owner approved continuing the branch.",
+                            "resolved_by": "owner",
+                        },
+                    }
+                ).encode("utf-8"),
+                headers={"Content-Type": "application/json", "If-Match": request_headers["ETag"]},
+            )
+            resolve.do_POST()
+            status, payload, response_headers = decode_response(resolve)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["tool"], "resolve_review")
+        self.assertEqual(payload["result"]["review_request"]["status"], "resolved")
+        self.assertEqual(payload["result"]["review_request"]["resolved_by"], "owner")
+        self.assertEqual(response_headers.get("ETag"), f'"{payload["result"]["fingerprint"]}"')
+
+    def test_post_tools_execute_can_list_filtered_reviews(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            seed = build_handler(
+                "POST",
+                "/plan",
+                body=json.dumps({"goal": "review list seed", "success_metric": "Reach 2 pilots", "deadline": "2026-05-01"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            seed.do_POST()
+            _seed_status, _seed_payload, seed_headers = decode_response(seed)
+
+            request = build_handler(
+                "POST",
+                "/tools/execute",
+                body=json.dumps(
+                    {
+                        "tool": "request_review",
+                        "input": {
+                            "scope": "plan",
+                            "reason": "Owner needs to approve the next planning branch.",
+                            "requested_by": "deepplan-server-test",
+                        },
+                    }
+                ).encode("utf-8"),
+                headers={"Content-Type": "application/json", "If-Match": seed_headers["ETag"]},
+            )
+            request.do_POST()
+            _request_status, request_payload, request_headers = decode_response(request)
+
+            resolve = build_handler(
+                "POST",
+                "/tools/execute",
+                body=json.dumps(
+                    {
+                        "tool": "resolve_review",
+                        "input": {
+                            "request_id": request_payload["result"]["review_request"]["id"],
+                            "status": "resolved",
+                            "resolution": "Owner approved continuing the branch.",
+                            "resolved_by": "owner",
+                        },
+                    }
+                ).encode("utf-8"),
+                headers={"Content-Type": "application/json", "If-Match": request_headers["ETag"]},
+            )
+            resolve.do_POST()
+
+            list_handler = build_handler(
+                "POST",
+                "/tools/execute",
+                body=json.dumps({"tool": "list_reviews", "input": {"status": "resolved"}}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            list_handler.do_POST()
+            status, payload, _headers = decode_response(list_handler)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["tool"], "list_reviews")
+        self.assertEqual(payload["result"]["count"], 1)
+        self.assertEqual(payload["result"]["reviews"][0]["status"], "resolved")
 
     def test_get_health_reports_retained_log_counts_after_prune(self):
         with DeepPlanStateIsolation():
@@ -597,11 +1166,13 @@ class DeepPlanServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(payload["role"], "reviewer")
         self.assertEqual(payload["profile"], "reviewer_restore")
-        self.assertEqual(payload["allowed_actions"], ["preview_restore_previous", "restore_previous"])
-        self.assertEqual(payload["capabilities"], ["plan.read", "plan.restore"])
+        self.assertEqual(payload["allowed_actions"], ["request_review", "resolve_review", "preview_restore_previous", "restore_previous"])
+        self.assertEqual(payload["capabilities"], ["plan.read", "review.request", "review.resolve", "plan.restore"])
         self.assertEqual(payload["actions"], host_action_contract("reviewer")["actions"])
         self.assertIn("input_schema", payload)
         action_map = {item["action"]: item for item in payload["actions"]}
+        self.assertEqual(action_map["request_review"]["required_capabilities"], ["review.request"])
+        self.assertEqual(action_map["resolve_review"]["required_capabilities"], ["review.resolve"])
         self.assertEqual(action_map["restore_previous"]["required_capabilities"], ["plan.restore"])
         self.assertEqual(action_map["preview_restore_previous"]["required_capabilities"], ["plan.read"])
 

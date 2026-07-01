@@ -1,0 +1,10 @@
+{
+  "name": "restore-safety",
+  "version": "v1",
+  "role": "reviewer",
+  "summary": "Use restore previews carefully before reverting plan direction.",
+  "depends_on_capabilities": ["plan.read", "plan.restore"],
+  "preferred_actions": ["preview_restore_previous", "restore_previous"],
+  "escalation_actions": [],
+  "input_signals": ["history", "changed_fields", "summary"]
+}

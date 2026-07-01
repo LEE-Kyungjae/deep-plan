@@ -1,0 +1,11 @@
+{
+  "name": "evidence-capture",
+  "version": "v1",
+  "role": "researcher",
+  "summary": "Capture evidence with provenance and replan-ready framing.",
+  "depends_on_capabilities": ["plan.read", "evidence.append_and_replan"],
+  "preferred_actions": ["capture_evidence_cycle"],
+  "escalation_actions": ["request_review"],
+  "input_signals": ["claim", "source", "confidence", "reference", "source_url"],
+  "prompt_asset": "prompts/evidence-capture.md"
+}

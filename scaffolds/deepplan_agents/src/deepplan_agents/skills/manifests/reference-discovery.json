@@ -1,0 +1,11 @@
+{
+  "name": "reference-discovery",
+  "version": "v1",
+  "role": "researcher",
+  "summary": "Shortlist references with explicit criteria and rejection rationale.",
+  "depends_on_capabilities": ["plan.read", "evidence.append_and_replan"],
+  "preferred_actions": ["capture_evidence_cycle"],
+  "escalation_actions": ["request_review"],
+  "input_signals": ["reference_discoveries", "review_recommendation", "review_reason"],
+  "prompt_asset": "prompts/reference-discovery.md"
+}

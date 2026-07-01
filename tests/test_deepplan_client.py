@@ -145,9 +145,11 @@ class DeepPlanClientTests(unittest.TestCase):
 
     def test_host_contract_capability_helpers_reflect_role_permissions(self):
         self.assertEqual(required_capabilities_for_action("planner", "update_plan"), ["plan.write"])
+        self.assertEqual(required_capabilities_for_action("planner", "request_review"), ["review.request"])
         self.assertTrue(role_has_action_capabilities("planner", "update_plan"))
         self.assertFalse(role_has_action_capabilities("reviewer", "update_plan"))
         self.assertTrue(role_has_action_capabilities("reviewer", "preview_restore_previous"))
+        self.assertTrue(role_has_action_capabilities("reviewer", "resolve_review"))
 
     def test_get_contracts_returns_catalog(self):
         with DeepPlanStateIsolation():
@@ -164,6 +166,215 @@ class DeepPlanClientTests(unittest.TestCase):
         self.assertIn("http_api", result["contracts"])
         self.assertIn("profile_summary", result["contracts"]["host_action_contract"])
         self.assertIn("conformance_manifest", result["contracts"])
+
+    def test_get_tools_and_get_tool_return_authoritative_catalog_views(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            client = DeepPlanClient(transport=handler_transport)
+            catalog = client.get_tools()
+            detail = client.get_tool("request_review")
+
+        self.assertTrue(catalog["ok"])
+        self.assertEqual(catalog["result_type"], "tool_catalog")
+        self.assertEqual(catalog["catalog"]["execute_endpoint"], "/tools/execute")
+        self.assertTrue(any(item["name"] == "request_review" for item in catalog["tools"]))
+        self.assertTrue(detail["ok"])
+        self.assertEqual(detail["tool"]["name"], "request_review")
+        self.assertEqual(detail["tool"]["kind"], "mutation")
+
+    def test_list_reviews_returns_filtered_review_records(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            client = DeepPlanClient(transport=handler_transport)
+            seed = client.update_plan(
+                {
+                    "goal": "client review listing",
+                    "success_metric": "Reach 2 pilots",
+                    "deadline": "2026-05-01",
+                }
+            )
+            requested = client.request_review(
+                {
+                    "scope": "plan",
+                    "reason": "Need owner confirmation.",
+                    "requested_by": "client-test",
+                    "priority": "high",
+                    "assigned_to": "owner",
+                    "stale_after": "2026-05-01T09:00:00Z",
+                    "sla_bucket": "24h",
+                },
+                expected_fingerprint=seed["fingerprint"],
+            )
+            client.resolve_review(
+                {
+                    "request_id": requested["review_request"]["id"],
+                    "status": "resolved",
+                    "resolution": "Confirmed.",
+                    "resolved_by": "owner",
+                    "assigned_to": "reviewer",
+                },
+                expected_fingerprint=requested["fingerprint"],
+            )
+            result = client.list_reviews(status="resolved", assigned_to="reviewer")
+            direct = client.get_reviews(status="resolved", assigned_to="reviewer")
+
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["reviews"][0]["status"], "resolved")
+        self.assertEqual(result["reviews"][0]["assigned_to"], "reviewer")
+        self.assertEqual(direct["count"], 1)
+        self.assertEqual(direct["reviews"][0]["priority"], "high")
+        self.assertEqual(direct["reviews"][0]["stale_after"], "2026-05-01T09:00:00Z")
+        self.assertEqual(direct["reviews"][0]["sla_bucket"], "24h")
+
+    def test_list_reviews_and_get_reviews_support_sorting(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            client = DeepPlanClient(transport=handler_transport)
+            seed = client.update_plan(
+                {
+                    "goal": "client review sorting",
+                    "success_metric": "Reach 2 pilots",
+                    "deadline": "2026-05-01",
+                }
+            )
+            first = client.request_review(
+                {
+                    "scope": "plan",
+                    "reason": "Low priority queue item.",
+                    "requested_by": "client-test",
+                    "priority": "low",
+                    "request_id": "review-low",
+                },
+                expected_fingerprint=seed["fingerprint"],
+            )
+            client.request_review(
+                {
+                    "scope": "plan",
+                    "reason": "High priority queue item.",
+                    "requested_by": "client-test",
+                    "priority": "high",
+                    "request_id": "review-high",
+                },
+                expected_fingerprint=first["fingerprint"],
+            )
+            sorted_tool = client.list_reviews(sort_by="priority", order="desc")
+            sorted_http = client.get_reviews(sort_by="priority", order="desc")
+
+        self.assertEqual([item["id"] for item in sorted_tool["reviews"][:2]], ["review-high", "review-low"])
+        self.assertEqual([item["id"] for item in sorted_http["reviews"][:2]], ["review-high", "review-low"])
+
+    def test_list_reviews_and_get_reviews_support_stale_after_sorting(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            client = DeepPlanClient(transport=handler_transport)
+            seed = client.update_plan(
+                {
+                    "goal": "client review stale sorting",
+                    "success_metric": "Reach 2 pilots",
+                    "deadline": "2026-05-01",
+                }
+            )
+            first = client.request_review(
+                {
+                    "scope": "plan",
+                    "reason": "Later deadline queue item.",
+                    "requested_by": "client-test",
+                    "request_id": "review-late",
+                    "stale_after": "2026-05-03T09:00:00Z",
+                },
+                expected_fingerprint=seed["fingerprint"],
+            )
+            second = client.request_review(
+                {
+                    "scope": "plan",
+                    "reason": "Soon deadline queue item.",
+                    "requested_by": "client-test",
+                    "request_id": "review-soon",
+                    "stale_after": "2026-04-26T09:00:00Z",
+                },
+                expected_fingerprint=first["fingerprint"],
+            )
+            client.request_review(
+                {
+                    "scope": "plan",
+                    "reason": "No deadline queue item.",
+                    "requested_by": "client-test",
+                    "request_id": "review-none",
+                },
+                expected_fingerprint=second["fingerprint"],
+            )
+            sorted_tool = client.list_reviews(sort_by="stale_after", order="asc")
+            sorted_http = client.get_reviews(sort_by="stale_after", order="asc")
+
+        self.assertEqual([item["id"] for item in sorted_tool["reviews"][:3]], ["review-soon", "review-late", "review-none"])
+        self.assertEqual([item["id"] for item in sorted_http["reviews"][:3]], ["review-soon", "review-late", "review-none"])
+
+    def test_get_review_and_update_review_use_direct_review_resource_paths(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            client = DeepPlanClient(transport=handler_transport)
+            seed = client.update_plan(
+                {
+                    "goal": "client review detail",
+                    "success_metric": "Reach 2 pilots",
+                    "deadline": "2026-05-01",
+                }
+            )
+            requested = client.request_review(
+                {
+                    "scope": "plan",
+                    "reason": "Need triage assignment.",
+                    "requested_by": "client-test",
+                },
+                expected_fingerprint=seed["fingerprint"],
+            )
+            request_id = requested["review_request"]["id"]
+            detail = client.get_review(request_id)
+            updated = client.update_review(
+                request_id,
+                {"priority": "high", "assigned_to": "reviewer", "stale_after": "2026-05-02T09:00:00Z", "sla_bucket": "24h"},
+                expected_fingerprint=requested["fingerprint"],
+            )
+
+        self.assertEqual(detail["tool_name"], "get_review")
+        self.assertEqual(detail["review"]["id"], request_id)
+        self.assertEqual(updated["tool_name"], "update_review")
+        self.assertEqual(updated["review_request"]["priority"], "high")
+        self.assertEqual(updated["review_request"]["assigned_to"], "reviewer")
+        self.assertEqual(updated["review_request"]["stale_after"], "2026-05-02T09:00:00Z")
+        self.assertEqual(updated["review_request"]["sla_bucket"], "24h")
+        self.assertEqual(client.tracked_fingerprint, updated["fingerprint"])
+
+    def test_get_reviewer_inbox_uses_direct_inbox_endpoint_with_queue_defaults(self):
+        calls = []
+
+        def transport(method: str, path: str, body=None, headers=None):
+            calls.append((method, path, body, headers))
+            return 200, {"ok": True, "reviews": [{"id": "review-1"}], "count": 1}, {}
+
+        client = DeepPlanClient(transport=transport)
+        result = client.get_reviewer_inbox("reviewer@example.com")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(
+            calls,
+            [("GET", "/reviews/inbox?assignee=reviewer%40example.com&limit=20", None, None)],
+        )
+
+    def test_get_review_inbox_alias_supports_custom_limit(self):
+        calls = []
+
+        def transport(method: str, path: str, body=None, headers=None):
+            calls.append((method, path, body, headers))
+            return 200, {"ok": True, "reviews": [], "count": 0}, {}
+
+        client = DeepPlanClient(transport=transport)
+        result = client.get_review_inbox("owner", limit=7)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["count"], 0)
+        self.assertEqual(calls, [("GET", "/reviews/inbox?assignee=owner&limit=7", None, None)])
 
     def test_get_doctor_returns_readiness_report(self):
         with DeepPlanStateIsolation():
@@ -216,6 +427,71 @@ class DeepPlanClientTests(unittest.TestCase):
         self.assertEqual(preview["metadata"]["goal"], "client previous first")
         self.assertEqual(restored["plan"]["goal"], "client previous first")
         self.assertNotEqual(first["fingerprint"], second["fingerprint"])
+
+    def test_request_review_uses_generic_tool_execute_surface(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            client = DeepPlanClient(transport=handler_transport)
+            seed = client.update_plan(
+                {
+                    "goal": "client review request",
+                    "success_metric": "Reach 2 pilots",
+                    "deadline": "2026-05-01",
+                }
+            )
+            result = client.request_review(
+                {
+                    "scope": "plan",
+                    "reason": "Need owner confirmation before committing to the next branch.",
+                    "requested_by": "client-test",
+                    "related_references": ["airflow", "paperclip"],
+                },
+                expected_fingerprint=seed["fingerprint"],
+                idempotency_key="client-review-1",
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["tool_name"], "request_review")
+        self.assertEqual(result["review_request"]["scope"], "plan")
+        self.assertEqual(result["plan"]["human_escalations"][0]["requested_by"], "client-test")
+        self.assertEqual(client.tracked_fingerprint, result["fingerprint"])
+
+    def test_resolve_review_uses_generic_tool_execute_surface(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            client = DeepPlanClient(transport=handler_transport)
+            seed = client.update_plan(
+                {
+                    "goal": "client review resolution",
+                    "success_metric": "Reach 2 pilots",
+                    "deadline": "2026-05-01",
+                }
+            )
+            requested = client.request_review(
+                {
+                    "scope": "plan",
+                    "reason": "Need owner confirmation before committing to the next branch.",
+                    "requested_by": "client-test",
+                },
+                expected_fingerprint=seed["fingerprint"],
+                idempotency_key="client-review-open-1",
+            )
+            result = client.resolve_review(
+                {
+                    "request_id": requested["review_request"]["id"],
+                    "status": "resolved",
+                    "resolution": "Owner approved continuing the branch.",
+                    "resolved_by": "owner",
+                },
+                expected_fingerprint=requested["fingerprint"],
+                idempotency_key="client-review-resolve-1",
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["tool_name"], "resolve_review")
+        self.assertEqual(result["review_request"]["status"], "resolved")
+        self.assertEqual(result["review_request"]["resolved_by"], "owner")
+        self.assertEqual(client.tracked_fingerprint, result["fingerprint"])
 
     def test_capture_evidence_cycle_returns_typed_multi_step_result(self):
         with DeepPlanStateIsolation():
@@ -656,9 +932,12 @@ class DeepPlanClientTests(unittest.TestCase):
         action_names = [item["action"] for item in contract["actions"]]
         self.assertIn("update_plan", action_names)
         self.assertIn("capture_evidence_cycle", action_names)
+        self.assertIn("request_review", action_names)
+        self.assertIn("resolve_review", action_names)
         self.assertIn("restore_previous", action_names)
         self.assertIn("update_plan", contract["allowed_actions"])
         self.assertIn("plan.write", contract["capabilities"])
+        self.assertIn("review.request", contract["capabilities"])
 
     def test_planner_host_update_plan_action_can_retry_stale_conflict(self):
         with DeepPlanStateIsolation():
@@ -730,6 +1009,51 @@ class DeepPlanClientTests(unittest.TestCase):
         self.assertTrue(event["result"]["retried"])
         self.assertEqual(event["result"]["post_cycle"]["plan"]["evidence"][-1]["claim"], "Planner host recovered evidence")
         self.assertEqual(event["result"]["post_cycle"]["plan"]["plan_tasks"][-1], "Retune follow-up flow")
+
+    def test_reviewer_host_can_resolve_review(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            planner = PlannerHostStep(adapter=_PLANNER_HOST_MODULE.DeepPlanKernelAdapter(DeepPlanClient(transport=handler_transport)), role="planner")
+            reviewer = PlannerHostStep(adapter=_PLANNER_HOST_MODULE.DeepPlanKernelAdapter(DeepPlanClient(transport=handler_transport)), role="reviewer")
+
+            plan_event = planner.run_event(
+                {
+                    "action": "update_plan",
+                    "payload": {
+                        "goal": "Need reviewer action",
+                        "success_metric": "Reach 3 retained pilots",
+                        "deadline": "2026-04-30",
+                    },
+                }
+            )
+            request_event = planner.run_event(
+                {
+                    "action": "request_review",
+                    "payload": {
+                        "scope": "plan",
+                        "reason": "Owner or reviewer must close the planning branch decision.",
+                        "requested_by": "planner",
+                    },
+                    "options": {"expected_fingerprint": plan_event["result"]["post_fingerprint"]},
+                }
+            )
+            resolve_event = reviewer.run_event(
+                {
+                    "action": "resolve_review",
+                    "payload": {
+                        "request_id": request_event["result"]["mutation_result"]["review_request"]["id"],
+                        "status": "resolved",
+                        "resolution": "Reviewer closed the branch decision.",
+                        "resolved_by": "reviewer",
+                    },
+                    "options": {"expected_fingerprint": request_event["result"]["post_fingerprint"]},
+                }
+            )
+
+        self.assertTrue(resolve_event["ok"])
+        self.assertEqual(resolve_event["type"], "review_resolved")
+        self.assertEqual(resolve_event["result"]["post_cycle"]["plan"]["human_escalations"][0]["status"], "resolved")
+        self.assertEqual(resolve_event["result"]["post_cycle"]["plan"]["human_escalations"][0]["resolved_by"], "reviewer")
 
     def test_planner_host_run_event_returns_invalid_action_taxonomy(self):
         host = PlannerHostStep(adapter=_PLANNER_HOST_MODULE.DeepPlanKernelAdapter(DeepPlanClient(transport=handler_transport)))

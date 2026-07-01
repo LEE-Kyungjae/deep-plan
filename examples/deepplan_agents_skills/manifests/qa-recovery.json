@@ -1,0 +1,10 @@
+{
+  "name": "qa-recovery",
+  "version": "v1",
+  "role": "planner",
+  "summary": "Respond to weak QA results without thrashing the plan.",
+  "depends_on_capabilities": ["plan.read", "plan.write"],
+  "preferred_actions": ["update_plan"],
+  "escalation_actions": ["request_review"],
+  "input_signals": ["qa.result", "qa.score", "validation.errors"]
+}

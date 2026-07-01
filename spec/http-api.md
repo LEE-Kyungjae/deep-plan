@@ -86,6 +86,91 @@ The response MUST include:
 
 Returns recent revision entries.
 
+### `GET /reviews?status=<status>&scope=<scope>&assigned_to=<assignee>&sort_by=<field>&order=<dir>&limit=<n>`
+
+Returns human-review escalation records from current plan state.
+
+The response MUST include:
+
+- `ok`
+- `tool_name` with value `list_reviews`
+- `result_type` with value `reviews`
+- `reviews`
+- `count`
+- `filters`
+
+`limit` MUST be an integer when provided.
+`sort_by` MUST be one of `requested_at`, `priority`, `status`, or `stale_after` when provided.
+`order` MUST be one of `asc` or `desc` when provided.
+
+### `GET /reviews/inbox?assignee=<assignee>&limit=<n>`
+
+Returns the reviewer inbox preset as an opinionated alias over review listing semantics.
+
+The server MUST execute this endpoint as if it called `list_reviews` with:
+
+- `status` set to `open`
+- `sort_by` set to `priority`
+- `order` set to `desc`
+
+If `assignee` is provided, the server MUST map it to `assigned_to`.
+
+The response MUST include:
+
+- `ok`
+- `tool_name` with value `list_reviews`
+- `result_type` with value `reviews`
+- `reviews`
+- `count`
+- `filters`
+
+The returned `filters` object MUST reflect the enforced inbox preset.
+`limit` MUST be an integer when provided.
+
+### `GET /reviews/<request_id>`
+
+Returns one human-review escalation record by identifier.
+
+The response MUST include:
+
+- `ok`
+- `tool_name` with value `get_review`
+- `result_type` with value `review`
+- `review`
+
+If the request identifier is unknown, the HTTP status MUST be `404`.
+
+### `POST /reviews/<request_id>`
+
+Updates triage fields on an existing human-review escalation record.
+
+The request body MAY include:
+
+- `priority`
+- `assigned_to`
+- `stale_after`
+- `sla_bucket`
+- `review_recommendation`
+- `review_reason`
+- `resolution`
+- `idempotency_key`
+
+The request body MUST NOT target a different `request_id` than the resource path.
+
+The response MUST include:
+
+- `ok`
+- `tool_name` with value `update_review`
+- `result_type` with value `mutation`
+- `review_request`
+- `plan`
+- `summary`
+- `validation`
+- `fingerprint`
+- `qa`
+
+If a fingerprint is available, the response MUST also include `ETag: "<fingerprint>"`.
+
 ### `GET /validate`
 
 Returns structural validation for the current plan.
@@ -93,6 +178,47 @@ Returns structural validation for the current plan.
 ### `GET /tools`
 
 Returns the tool schema catalogue.
+
+The response MUST include:
+
+- `ok`
+- `result_type` with value `tool_catalog`
+- `contract_version`
+- `implementation_version`
+- `catalog`
+- `tools`
+
+The `catalog` object SHOULD include:
+
+- `authoritative` with value `true`
+- `transport`
+- `list_endpoint`
+- `detail_endpoint_template`
+- `execute_endpoint`
+- `legacy_execute_endpoint_template`
+- `tool_count`
+- `read_tool_count`
+- `mutation_tool_count`
+
+Each tool descriptor SHOULD include:
+
+- `name`
+- `description`
+- `input_schema`
+- `kind`
+- `execute_via`
+
+### `GET /tools/<tool_name>`
+
+Returns the authoritative descriptor for one tool.
+
+The response MUST include:
+
+- `ok`
+- `result_type` with value `tool_detail`
+- `contract_version`
+- `implementation_version`
+- `tool`
 
 ### `GET /contracts`
 
@@ -168,6 +294,26 @@ Executes the named tool wrapper.
 The request body MUST be a JSON object.
 If the body contains `input`, that object MUST be used as the tool input.
 Otherwise the entire request body MUST be treated as the tool input.
+
+### `POST /tools/execute`
+
+Executes a tool through the authoritative generic tool endpoint.
+
+The request body MUST be a JSON object and MUST include:
+
+- `tool`
+- `input`
+
+`input` MUST be a JSON object.
+If `If-Match` is present and `input.expected_fingerprint` is absent, the server MUST inject the normalized fingerprint into `input.expected_fingerprint`.
+
+The response MUST include:
+
+- `tool`
+- `input`
+- `result`
+
+`POST /tools/<tool_name>` remains supported as a legacy wrapper and MUST preserve its existing request semantics.
 
 ## Error Semantics
 

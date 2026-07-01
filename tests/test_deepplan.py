@@ -118,6 +118,269 @@ class DeepPlanRegressionTests(unittest.TestCase):
         self.assertEqual(len(second["plan"]["evidence"]), 1)
         self.assertEqual(first["fingerprint"], second["fingerprint"])
 
+    def test_request_review_tool_appends_human_escalation_and_replays_idempotently(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            base = deepplan_agent.execute_tool(
+                "update_plan",
+                {
+                    "goal": "Need review path",
+                    "success_metric": "Reach 2 pilots",
+                    "deadline": "2026-04-30",
+                },
+            )
+            payload = {
+                "scope": "reference_discovery",
+                "reason": "Shortlist adoption changes DeepPlan boundary decisions.",
+                "requested_by": "planner",
+                "priority": "high",
+                "assigned_to": "owner",
+                "stale_after": "2026-05-01T09:00:00Z",
+                "sla_bucket": "24h",
+                "review_recommendation": "owner_decision_required",
+                "related_references": ["paperclip", "airflow"],
+                "idempotency_key": "review-1",
+            }
+            first = deepplan_agent.execute_tool(
+                "request_review",
+                {**payload, "expected_fingerprint": base["fingerprint"]},
+            )
+            second = deepplan_agent.execute_tool(
+                "request_review",
+                payload,
+            )
+
+        self.assertFalse(first["idempotency_replayed"])
+        self.assertTrue(second["idempotency_replayed"])
+        self.assertEqual(len(second["plan"]["human_escalations"]), 1)
+        self.assertEqual(second["review_request"]["scope"], "reference_discovery")
+        self.assertEqual(second["review_request"]["priority"], "high")
+        self.assertEqual(second["review_request"]["assigned_to"], "owner")
+        self.assertEqual(second["review_request"]["stale_after"], "2026-05-01T09:00:00Z")
+        self.assertEqual(second["review_request"]["sla_bucket"], "24h")
+        self.assertEqual(second["plan"]["human_escalations"][0]["review_recommendation"], "owner_decision_required")
+        self.assertEqual(first["fingerprint"], second["fingerprint"])
+
+    def test_list_reviews_tool_filters_open_review_records(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            base = deepplan_agent.execute_tool(
+                "update_plan",
+                {
+                    "goal": "Need review listing",
+                    "success_metric": "Reach 2 pilots",
+                    "deadline": "2026-04-30",
+                },
+            )
+            requested = deepplan_agent.execute_tool(
+                "request_review",
+                {
+                    "scope": "plan",
+                    "reason": "Need owner review.",
+                    "requested_by": "planner",
+                    "expected_fingerprint": base["fingerprint"],
+                },
+            )
+            deepplan_agent.execute_tool(
+                "resolve_review",
+                {
+                    "request_id": requested["review_request"]["id"],
+                    "status": "resolved",
+                    "resolution": "Reviewed.",
+                    "resolved_by": "owner",
+                    "assigned_to": "reviewer",
+                    "expected_fingerprint": requested["fingerprint"],
+                },
+            )
+            open_result = deepplan_agent.execute_tool("list_reviews", {"status": "open"})
+            resolved_result = deepplan_agent.execute_tool("list_reviews", {"status": "resolved", "assigned_to": "reviewer"})
+
+        self.assertEqual(open_result["count"], 0)
+        self.assertEqual(resolved_result["count"], 1)
+        self.assertEqual(resolved_result["reviews"][0]["status"], "resolved")
+        self.assertEqual(resolved_result["reviews"][0]["assigned_to"], "reviewer")
+
+    def test_list_reviews_tool_sorts_by_priority_and_requested_at(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            base = deepplan_agent.execute_tool(
+                "update_plan",
+                {
+                    "goal": "Need review sorting",
+                    "success_metric": "Reach 2 pilots",
+                    "deadline": "2026-04-30",
+                },
+            )
+            first = deepplan_agent.execute_tool(
+                "request_review",
+                {
+                    "scope": "plan",
+                    "reason": "Low priority queue item.",
+                    "requested_by": "planner",
+                    "priority": "low",
+                    "request_id": "review-low",
+                    "expected_fingerprint": base["fingerprint"],
+                },
+            )
+            second = deepplan_agent.execute_tool(
+                "request_review",
+                {
+                    "scope": "plan",
+                    "reason": "High priority queue item.",
+                    "requested_by": "planner",
+                    "priority": "high",
+                    "request_id": "review-high",
+                    "expected_fingerprint": first["fingerprint"],
+                },
+            )
+            priority_sorted = deepplan_agent.execute_tool(
+                "list_reviews",
+                {"sort_by": "priority", "order": "desc"},
+            )
+            requested_sorted = deepplan_agent.execute_tool(
+                "list_reviews",
+                {"sort_by": "requested_at", "order": "asc"},
+            )
+
+        self.assertEqual([item["id"] for item in priority_sorted["reviews"][:2]], ["review-high", "review-low"])
+        self.assertEqual([item["id"] for item in requested_sorted["reviews"][:2]], ["review-low", "review-high"])
+
+    def test_list_reviews_tool_sorts_by_stale_after_and_leaves_missing_deadlines_last(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            base = deepplan_agent.execute_tool(
+                "update_plan",
+                {
+                    "goal": "Need stale-after review sorting",
+                    "success_metric": "Reach 2 pilots",
+                    "deadline": "2026-04-30",
+                },
+            )
+            first = deepplan_agent.execute_tool(
+                "request_review",
+                {
+                    "scope": "plan",
+                    "reason": "Later deadline queue item.",
+                    "requested_by": "planner",
+                    "request_id": "review-late",
+                    "stale_after": "2026-05-03T09:00:00Z",
+                    "expected_fingerprint": base["fingerprint"],
+                },
+            )
+            second = deepplan_agent.execute_tool(
+                "request_review",
+                {
+                    "scope": "plan",
+                    "reason": "Soon deadline queue item.",
+                    "requested_by": "planner",
+                    "request_id": "review-soon",
+                    "stale_after": "2026-04-26T09:00:00Z",
+                    "expected_fingerprint": first["fingerprint"],
+                },
+            )
+            third = deepplan_agent.execute_tool(
+                "request_review",
+                {
+                    "scope": "plan",
+                    "reason": "No deadline queue item.",
+                    "requested_by": "planner",
+                    "request_id": "review-none",
+                    "expected_fingerprint": second["fingerprint"],
+                },
+            )
+            stale_sorted = deepplan_agent.execute_tool(
+                "list_reviews",
+                {"sort_by": "stale_after", "order": "asc"},
+            )
+
+        self.assertEqual([item["id"] for item in stale_sorted["reviews"][:3]], ["review-soon", "review-late", "review-none"])
+        self.assertEqual(stale_sorted["filters"]["sort_by"], "stale_after")
+
+    def test_get_review_and_update_review_tools_return_and_modify_one_record(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            base = deepplan_agent.execute_tool(
+                "update_plan",
+                {
+                    "goal": "Need review detail path",
+                    "success_metric": "Reach 2 pilots",
+                    "deadline": "2026-04-30",
+                },
+            )
+            requested = deepplan_agent.execute_tool(
+                "request_review",
+                {
+                    "scope": "plan",
+                    "reason": "Need triage owner.",
+                    "requested_by": "planner",
+                    "expected_fingerprint": base["fingerprint"],
+                },
+            )
+            detail = deepplan_agent.execute_tool(
+                "get_review",
+                {"request_id": requested["review_request"]["id"]},
+            )
+            updated = deepplan_agent.execute_tool(
+                "update_review",
+                {
+                    "request_id": requested["review_request"]["id"],
+                    "priority": "high",
+                    "assigned_to": "reviewer",
+                    "stale_after": "2026-05-03T09:00:00Z",
+                    "sla_bucket": "72h",
+                    "review_recommendation": "human_review",
+                    "expected_fingerprint": requested["fingerprint"],
+                },
+            )
+
+        self.assertEqual(detail["review"]["id"], requested["review_request"]["id"])
+        self.assertEqual(updated["review_request"]["priority"], "high")
+        self.assertEqual(updated["review_request"]["assigned_to"], "reviewer")
+        self.assertEqual(updated["review_request"]["stale_after"], "2026-05-03T09:00:00Z")
+        self.assertEqual(updated["review_request"]["sla_bucket"], "72h")
+        self.assertEqual(updated["review_request"]["review_recommendation"], "human_review")
+
+    def test_resolve_review_tool_updates_existing_human_escalation_and_replays_idempotently(self):
+        with DeepPlanStateIsolation():
+            deepplan.ensure_state()
+            base = deepplan_agent.execute_tool(
+                "update_plan",
+                {
+                    "goal": "Need review resolution path",
+                    "success_metric": "Reach 2 pilots",
+                    "deadline": "2026-04-30",
+                },
+            )
+            requested = deepplan_agent.execute_tool(
+                "request_review",
+                {
+                    "scope": "plan",
+                    "reason": "Owner must choose whether to continue this branch.",
+                    "requested_by": "planner",
+                    "idempotency_key": "review-open-1",
+                    "expected_fingerprint": base["fingerprint"],
+                },
+            )
+            payload = {
+                "request_id": requested["review_request"]["id"],
+                "status": "resolved",
+                "resolution": "Owner approved continuing the branch.",
+                "resolved_by": "owner",
+                "idempotency_key": "review-resolve-1",
+            }
+            first = deepplan_agent.execute_tool(
+                "resolve_review",
+                {**payload, "expected_fingerprint": requested["fingerprint"]},
+            )
+            second = deepplan_agent.execute_tool("resolve_review", payload)
+
+        self.assertFalse(first["idempotency_replayed"])
+        self.assertTrue(second["idempotency_replayed"])
+        self.assertEqual(second["review_request"]["status"], "resolved")
+        self.assertEqual(second["review_request"]["resolution"], "Owner approved continuing the branch.")
+        self.assertEqual(second["review_request"]["resolved_by"], "owner")
+        self.assertEqual(first["fingerprint"], second["fingerprint"])
+
     def test_replan_idempotency_key_replays_without_duplicate_task_append(self):
         with DeepPlanStateIsolation():
             deepplan.ensure_state()
@@ -876,6 +1139,118 @@ class DeepPlanRegressionTests(unittest.TestCase):
         self.assertTrue(report["matches"])
         self.assertEqual(report["runtime_required_count"], report["file_required_count"])
         self.assertEqual(report["runtime_property_count"], report["file_property_count"])
+
+    def test_plan_shape_accepts_structured_evidence_provenance_extensions(self):
+        plan = deepplan.default_plan()
+        plan["evidence"] = [
+            {
+                "claim": "Activation improved after guided onboarding.",
+                "source": "experiment:guided-onboarding",
+                "confidence": 82,
+                "axis": "market",
+                "date": "2026-04-24",
+                "evidence_type": "experiment_result",
+                "reference": "guided-onboarding-notes",
+                "reference_id": "ref-guided-onboarding",
+                "field": "activation_rate",
+                "observed_value": "0.42",
+                "expected_value": "0.30",
+                "selector": "metrics.activation_rate",
+                "source_url": "https://example.com/reports/guided-onboarding",
+                "artifact": "notebook://activation/2026-04-24",
+                "quote": "Participants completed setup more often with guided steps.",
+                "note": "Preliminary uplift only.",
+                "review_recommendation": "confirm_experiment_validity",
+                "review_reason": "Treatment sample is still small.",
+                "provenance": {
+                    "method": "notebook_export",
+                    "captured_at": "2026-04-24T09:30:00+00:00",
+                    "collected_by": "growth-analyst",
+                    "artifact": "notebook://activation/2026-04-24",
+                    "locator": "cell://summary/4",
+                },
+                "escalation": {
+                    "status": "open",
+                    "reason": "Need manual review before adopting onboarding as the default path.",
+                    "requested_at": "2026-04-24T10:00:00+00:00",
+                    "requested_by": "deepplan-reviewer",
+                },
+            }
+        ]
+
+        validation = deepplan.validate_plan_shape(plan)
+
+        self.assertEqual(validation, {"valid": True, "errors": []})
+
+    def test_plan_shape_accepts_reference_discovery_and_human_escalation_extensions(self):
+        plan = deepplan.default_plan()
+        plan["human_escalations"] = [
+            {
+                "id": "esc-001",
+                "status": "open",
+                "reason": "Choose whether the shortlisted agent runtimes fit DeepPlan's repo boundary.",
+                "scope": "plan",
+                "requested_at": "2026-04-24T11:00:00+00:00",
+                "requested_by": "deepplan",
+                "related_references": ["paperclip", "airflow"],
+            }
+        ]
+        plan["reference_discoveries"] = [
+            {
+                "ts": "2026-04-24T11:05:00+00:00",
+                "question": "Which external agent patterns should DeepPlan borrow?",
+                "context": "Compare runtime orchestration and tool contracts.",
+                "search_mode": "comparative_repo_review",
+                "trigger_signals": ["Need clearer escalation boundaries."],
+                "selection_criteria": ["Prefer server-authoritative tool contracts.", "Avoid embedding runtime orchestration in DeepPlan core."],
+                "candidate_queries": ["airflow agent tools", "paperclip agent runtime", "deepplan escalation contract"],
+                "shortlisted_references": ["airflow", "paperclip"],
+                "rejected_references": ["generic chat agents"],
+                "decision": "Adopt contract patterns, not runtime orchestration.",
+                "notes": "Runtime/session management should live outside the core repo.",
+                "decision_ref": "rev-2026-04-24-01",
+                "decision_status": "needs_review",
+                "source_urls": [
+                    "https://example.com/repos/airflow",
+                    "https://example.com/repos/paperclip",
+                ],
+                "follow_up_question": "What is the minimal escalation contract DeepPlan should persist?",
+                "selected_reference_records": [
+                    {
+                        "reference": "airflow",
+                        "why_selected": "It exposes tool discovery and human review as explicit server contracts.",
+                        "pattern": "authoritative_tool_catalog",
+                        "evidence_links": ["ev-001"],
+                    }
+                ],
+                "provenance": {
+                    "provider": "local_repo_scan",
+                    "captured_at": "2026-04-24T11:04:00+00:00",
+                    "collector": "codex",
+                },
+                "review_recommendation": "owner_decision_required",
+                "review_reason": "Shortlist adoption affects repo boundary decisions.",
+                "escalation": {
+                    "status": "open",
+                    "reason": "Final shortlist adoption needs owner approval.",
+                    "requested_at": "2026-04-24T11:06:00+00:00",
+                },
+            }
+        ]
+
+        validation = deepplan.validate_plan_shape(plan)
+
+        self.assertEqual(validation, {"valid": True, "errors": []})
+
+    def test_schema_keeps_extension_points_open_for_evidence_reference_and_plan_level_escalations(self):
+        schema = deepplan.load_plan_schema()
+        evidence_schema = schema["properties"]["evidence"]["items"]["oneOf"][1]
+        reference_schema = schema["properties"]["reference_discoveries"]["items"]
+
+        self.assertTrue(schema["additionalProperties"])
+        self.assertTrue(evidence_schema["additionalProperties"])
+        self.assertTrue(reference_schema["additionalProperties"])
+        self.assertNotIn("human_escalations", schema["required"])
 
     def test_cmd_schema_check_prints_contract_status(self):
         stdout = io.StringIO()

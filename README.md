@@ -551,6 +551,8 @@ See also:
 - `examples/deepplan_kernel_adapter.py`
 - `examples/deepplan_planner_host.py`
 - `examples/deepplan_reference_consumer.ts`
+- `examples/deepplan_agents_skills/registry.py`
+- `scaffolds/deepplan_agents/`
 - `deepplan_client.py` remains as a compatibility import path
 
 Install the SDK surface locally from this repo:

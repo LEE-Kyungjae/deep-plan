@@ -1,0 +1,10 @@
+{
+  "name": "human-handoff",
+  "version": "v1",
+  "role": "planner",
+  "summary": "Escalate for human review when uncertainty or boundary risk is high.",
+  "depends_on_capabilities": ["plan.read", "review.request"],
+  "preferred_actions": ["request_review"],
+  "escalation_actions": [],
+  "input_signals": ["review_recommendation", "review_reason", "risk_signal_insights"]
+}

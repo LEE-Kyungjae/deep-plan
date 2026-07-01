@@ -1,0 +1,10 @@
+{
+  "name": "evidence-capture",
+  "version": "v1",
+  "role": "researcher",
+  "summary": "Capture evidence with provenance and trigger replan-safe updates.",
+  "depends_on_capabilities": ["plan.read", "evidence.append_and_replan"],
+  "preferred_actions": ["capture_evidence_cycle"],
+  "escalation_actions": ["request_review"],
+  "input_signals": ["claim", "source", "confidence", "reference", "source_url"]
+}

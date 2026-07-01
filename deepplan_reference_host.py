@@ -73,6 +73,28 @@ class PlannerHostStep:
             )
             return {"type": "evidence_cycle_applied", "action": action, "summary": summarize_for_host(result), "result": result}
 
+        if action == "request_review":
+            result = self.adapter.client.apply_and_get_cycle_with_retry(
+                "request_review",
+                payload,
+                history_limit=history_limit,
+                expected_fingerprint=expected_fingerprint,
+                require_healthy=require_healthy,
+                allow_non_idempotent_retry=allow_retry,
+            )
+            return {"type": "review_requested", "action": action, "summary": summarize_for_host(result), "result": result}
+
+        if action == "resolve_review":
+            result = self.adapter.client.apply_and_get_cycle_with_retry(
+                "resolve_review",
+                payload,
+                history_limit=history_limit,
+                expected_fingerprint=expected_fingerprint,
+                require_healthy=require_healthy,
+                allow_non_idempotent_retry=allow_retry,
+            )
+            return {"type": "review_resolved", "action": action, "summary": summarize_for_host(result), "result": result}
+
         if action == "preview_restore_previous":
             preview = self.adapter.preview_restore_previous()
             return {"type": "restore_preview", "action": action, "preview": preview}

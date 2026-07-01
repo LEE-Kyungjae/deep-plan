@@ -1,0 +1,11 @@
+{
+  "name": "plan-framing",
+  "version": "v1",
+  "role": "planner",
+  "summary": "Sharpen direction, planning horizon, and option selection.",
+  "depends_on_capabilities": ["plan.read", "plan.write"],
+  "preferred_actions": ["update_plan"],
+  "escalation_actions": ["request_review"],
+  "input_signals": ["goal", "selected_option", "planning_horizon", "review_cadence"],
+  "prompt_asset": "prompts/plan-framing.md"
+}

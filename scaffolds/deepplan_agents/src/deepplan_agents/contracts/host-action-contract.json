@@ -50,32 +50,6 @@
       "options": ["expected_fingerprint", "allow_retry", "require_healthy", "history_limit"]
     }
   ],
-  "capabilities": [
-    {
-      "name": "plan.read",
-      "description": "Read current plan, validation, history, and restore previews."
-    },
-    {
-      "name": "plan.write",
-      "description": "Apply top-level plan updates."
-    },
-    {
-      "name": "evidence.append_and_replan",
-      "description": "Append evidence and run a planning cycle."
-    },
-    {
-      "name": "review.request",
-      "description": "Open a human-review escalation against the current plan state."
-    },
-    {
-      "name": "review.resolve",
-      "description": "Acknowledge, dismiss, or resolve an existing human-review escalation."
-    },
-    {
-      "name": "plan.restore",
-      "description": "Restore a previous revision."
-    }
-  ],
   "profiles": {
     "planner_full": {
       "capabilities": ["plan.read", "plan.write", "evidence.append_and_replan", "review.request", "review.resolve", "plan.restore"],
@@ -94,29 +68,5 @@
     "planner": "planner_full",
     "researcher": "researcher_capture",
     "reviewer": "reviewer_restore"
-  },
-  "input_schema": {
-    "type": "object",
-    "properties": {
-      "action": {
-        "type": "string",
-        "enum": ["update_plan", "capture_evidence_cycle", "request_review", "resolve_review", "preview_restore_previous", "restore_previous"]
-      },
-      "payload": {
-        "type": "object"
-      },
-      "options": {
-        "type": "object",
-        "properties": {
-          "expected_fingerprint": {"type": "string"},
-          "allow_retry": {"type": "boolean"},
-          "require_healthy": {"type": "boolean"},
-          "history_limit": {"type": "integer"}
-        },
-        "additionalProperties": false
-      }
-    },
-    "required": ["action"],
-    "additionalProperties": false
   }
 }

@@ -1,0 +1,16 @@
+{
+  "profiles": {
+    "planner_full": {
+      "role": "planner",
+      "default_skills": ["plan-framing", "qa-recovery", "human-handoff"]
+    },
+    "researcher_capture": {
+      "role": "researcher",
+      "default_skills": ["evidence-capture", "reference-discovery", "boundary-awareness"]
+    },
+    "reviewer_restore": {
+      "role": "reviewer",
+      "default_skills": ["review-triage", "restore-safety", "decision-closure"]
+    }
+  }
+}

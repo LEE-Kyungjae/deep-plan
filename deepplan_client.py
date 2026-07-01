@@ -3,6 +3,7 @@ import json
 from dataclasses import dataclass
 from http.client import HTTPConnection
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from urllib.parse import quote
 from uuid import uuid4
 
 
@@ -206,6 +207,68 @@ class DeepPlanClient:
     def get_history(self) -> Dict[str, Any]:
         return self.request("GET", "/history")
 
+    def get_reviews(
+        self,
+        *,
+        status: str = "",
+        scope: str = "",
+        assigned_to: str = "",
+        sort_by: str = "requested_at",
+        order: str = "desc",
+        limit: int = 20,
+    ) -> Dict[str, Any]:
+        query_parts = [f"limit={int(limit)}"]
+        if status:
+            query_parts.append(f"status={status}")
+        if scope:
+            query_parts.append(f"scope={scope}")
+        if assigned_to:
+            query_parts.append(f"assigned_to={assigned_to}")
+        if sort_by:
+            query_parts.append(f"sort_by={sort_by}")
+        if order:
+            query_parts.append(f"order={order}")
+        return self.request("GET", f"/reviews?{'&'.join(query_parts)}")
+
+    def get_review(self, request_id: str) -> Dict[str, Any]:
+        return self.request("GET", f"/reviews/{quote(request_id, safe='')}")
+
+    def get_reviewer_inbox(self, assignee: str, *, limit: int = 20) -> Dict[str, Any]:
+        query_parts = [f"assignee={quote(assignee, safe='')}", f"limit={int(limit)}"]
+        return self.request("GET", f"/reviews/inbox?{'&'.join(query_parts)}")
+
+    def get_review_inbox(self, assignee: str, *, limit: int = 20) -> Dict[str, Any]:
+        return self.get_reviewer_inbox(assignee, limit=limit)
+
+    def list_reviews(
+        self,
+        *,
+        status: str = "",
+        scope: str = "",
+        assigned_to: str = "",
+        sort_by: str = "requested_at",
+        order: str = "desc",
+        limit: int = 20,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {"limit": limit}
+        if status:
+            payload["status"] = status
+        if scope:
+            payload["scope"] = scope
+        if assigned_to:
+            payload["assigned_to"] = assigned_to
+        if sort_by:
+            payload["sort_by"] = sort_by
+        if order:
+            payload["order"] = order
+        return self.execute_tool("list_reviews", payload)["result"]
+
+    def get_tools(self) -> Dict[str, Any]:
+        return self.request("GET", "/tools")
+
+    def get_tool(self, tool_name: str) -> Dict[str, Any]:
+        return self.request("GET", f"/tools/{tool_name}")
+
     def get_contracts(self) -> Dict[str, Any]:
         return self.request("GET", "/contracts")
 
@@ -236,8 +299,40 @@ class DeepPlanClient:
             use_tracked_fingerprint=True,
         )
 
+    def execute_tool(self, tool_name: str, payload: Dict[str, Any], *, expected_fingerprint: str = "") -> Dict[str, Any]:
+        return self.request(
+            "POST",
+            "/tools/execute",
+            body={"tool": tool_name, "input": payload},
+            expected_fingerprint=expected_fingerprint,
+        )
+
     def run_tool(self, tool_name: str, payload: Dict[str, Any], *, expected_fingerprint: str = "") -> Dict[str, Any]:
-        return self.request("POST", f"/tools/{tool_name}", body={"input": payload}, expected_fingerprint=expected_fingerprint)
+        return self.execute_tool(tool_name, payload, expected_fingerprint=expected_fingerprint)
+
+    def request_review(self, payload: Dict[str, Any], *, expected_fingerprint: str = "", idempotency_key: str = "") -> Dict[str, Any]:
+        return self.execute_tool(
+            "request_review",
+            with_optional_key(payload, "idempotency_key", idempotency_key),
+            expected_fingerprint=expected_fingerprint or self.tracked_fingerprint,
+        )["result"]
+
+    def resolve_review(self, payload: Dict[str, Any], *, expected_fingerprint: str = "", idempotency_key: str = "") -> Dict[str, Any]:
+        return self.execute_tool(
+            "resolve_review",
+            with_optional_key(payload, "idempotency_key", idempotency_key),
+            expected_fingerprint=expected_fingerprint or self.tracked_fingerprint,
+        )["result"]
+
+    def update_review(self, request_id: str, payload: Dict[str, Any], *, expected_fingerprint: str = "", idempotency_key: str = "") -> Dict[str, Any]:
+        body = with_optional_key(dict(payload), "idempotency_key", idempotency_key)
+        return self.request(
+            "POST",
+            f"/reviews/{quote(request_id, safe='')}",
+            body=body,
+            expected_fingerprint=expected_fingerprint or self.tracked_fingerprint,
+            use_tracked_fingerprint=True,
+        )
 
     def preview_restore(self, *, revision_id: str = "", previous: bool = False) -> Dict[str, Any]:
         payload: Dict[str, Any] = {}
@@ -277,6 +372,13 @@ class DeepPlanClient:
             "update_plan": self.update_plan,
             "replan": self.replan,
             "add_evidence": self.add_evidence,
+            "request_review": self.request_review,
+            "resolve_review": self.resolve_review,
+            "update_review": lambda input_payload, *, expected_fingerprint="": self.update_review(
+                str(input_payload.get("request_id", "")).strip(),
+                input_payload,
+                expected_fingerprint=expected_fingerprint,
+            ),
             "restore_revision": restore_mutation,
         }
         if operation not in mutation_map:
@@ -313,7 +415,7 @@ class DeepPlanClient:
         require_healthy: bool = False,
     ) -> Dict[str, Any]:
         operation_payload = dict(payload)
-        if operation in {"add_evidence", "replan"} and allow_non_idempotent_retry and not str(operation_payload.get("idempotency_key", "")).strip():
+        if operation in {"add_evidence", "replan", "request_review", "resolve_review", "update_review"} and allow_non_idempotent_retry and not str(operation_payload.get("idempotency_key", "")).strip():
             operation_payload["idempotency_key"] = f"{operation}_{uuid4().hex}"
         attempt = 1
         try:

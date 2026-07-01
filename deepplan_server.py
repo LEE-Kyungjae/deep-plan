@@ -4,11 +4,19 @@ import json
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from deepplan_agent import execute_tool, list_tools, natural_language_to_tool
 from deepplan_host_contract import host_action_contract
-from deepplan import PlanConflictError, contracts_catalog, cycle_snapshot, doctor_report, normalize_fingerprint
+from deepplan import (
+    CONTRACT_VERSION,
+    IMPLEMENTATION_VERSION,
+    PlanConflictError,
+    contracts_catalog,
+    cycle_snapshot,
+    doctor_report,
+    normalize_fingerprint,
+)
 
 
 class DeepPlanHandler(BaseHTTPRequestHandler):
@@ -50,11 +58,60 @@ class DeepPlanHandler(BaseHTTPRequestHandler):
         if path == "/history":
             self._write_json(HTTPStatus.OK, execute_tool("get_history", {}))
             return
+        if path == "/reviews":
+            payload: Dict[str, Any] = {}
+            for key in ["status", "scope", "assigned_to", "sort_by", "order"]:
+                value = str(query.get(key, [""])[0]).strip()
+                if value:
+                    payload[key] = value
+            if "limit" in query:
+                try:
+                    payload["limit"] = int(query.get("limit", ["20"])[0])
+                except ValueError:
+                    self._write_error(HTTPStatus.BAD_REQUEST, "limit must be an integer", operation="list_reviews", step="query")
+                    return
+            self._write_json(HTTPStatus.OK, execute_tool("list_reviews", payload))
+            return
+        if path == "/reviews/inbox":
+            payload: Dict[str, Any] = {
+                "status": "open",
+                "sort_by": "priority",
+                "order": "desc",
+            }
+            assignee = str(query.get("assignee", [""])[0]).strip()
+            if assignee:
+                payload["assigned_to"] = assignee
+            if "limit" in query:
+                try:
+                    payload["limit"] = int(query.get("limit", ["20"])[0])
+                except ValueError:
+                    self._write_error(HTTPStatus.BAD_REQUEST, "limit must be an integer", operation="list_reviews", step="query")
+                    return
+            self._write_json(HTTPStatus.OK, execute_tool("list_reviews", payload))
+            return
+        if path.startswith("/reviews/"):
+            request_id = path.split("/", 2)[2].strip()
+            if not request_id:
+                self._write_error(HTTPStatus.NOT_FOUND, "not_found", kind="not_found")
+                return
+            try:
+                self._write_json(HTTPStatus.OK, execute_tool("get_review", {"request_id": request_id}))
+            except ValueError as exc:
+                self._write_error(HTTPStatus.NOT_FOUND, str(exc), kind="not_found", operation="get_review", step="lookup")
+            return
         if path == "/validate":
             self._write_json(HTTPStatus.OK, execute_tool("validate_plan", {}))
             return
         if path == "/tools":
-            self._write_json(HTTPStatus.OK, {"tools": list_tools()})
+            self._write_json(HTTPStatus.OK, self._tool_catalog_response())
+            return
+        if path.startswith("/tools/"):
+            tool_name = path.split("/", 2)[2].strip()
+            tool = self._tool_schema(tool_name)
+            if not tool:
+                self._write_error(HTTPStatus.NOT_FOUND, f"unknown tool: {tool_name}", operation=tool_name or "tool_lookup", step="lookup")
+                return
+            self._write_json(HTTPStatus.OK, self._tool_detail_response(tool))
             return
         if path == "/contracts":
             self._write_json(HTTPStatus.OK, contracts_catalog())
@@ -83,6 +140,19 @@ class DeepPlanHandler(BaseHTTPRequestHandler):
 
         if path == "/evidence":
             self._execute_tool_json("add_evidence", payload, expected_fingerprint)
+            return
+
+        if path.startswith("/reviews/"):
+            request_id = path.split("/", 2)[2].strip()
+            if not request_id:
+                self._write_error(HTTPStatus.NOT_FOUND, "not_found", kind="not_found")
+                return
+            if "request_id" not in payload:
+                payload["request_id"] = request_id
+            elif str(payload.get("request_id", "")).strip() != request_id:
+                self._write_error(HTTPStatus.BAD_REQUEST, "request_id must match review resource", operation="update_review", step="input")
+                return
+            self._execute_tool_json("update_review", payload, expected_fingerprint)
             return
 
         if path == "/replan":
@@ -131,6 +201,19 @@ class DeepPlanHandler(BaseHTTPRequestHandler):
             self._write_json(HTTPStatus.OK, {"tool": tool_name, "input": tool_input, "result": result}, extra_headers=headers)
             return
 
+        if path == "/tools/execute":
+            tool_name = str(payload.get("tool", "")).strip()
+            tool_input = payload.get("input", {})
+            if not tool_name:
+                self._write_error(HTTPStatus.BAD_REQUEST, "tool is required", operation="tool_execute", step="input")
+                return
+            if not isinstance(tool_input, dict):
+                self._write_error(HTTPStatus.BAD_REQUEST, "tool input must be a JSON object", operation=tool_name, step="input")
+                return
+            self._merge_expected_fingerprint(tool_input, expected_fingerprint)
+            self._execute_tool_request(tool_name, tool_input)
+            return
+
         if path.startswith("/tools/"):
             tool_name = path.split("/", 2)[2].strip()
             tool_input = payload.get("input", payload)
@@ -138,7 +221,7 @@ class DeepPlanHandler(BaseHTTPRequestHandler):
                 self._write_error(HTTPStatus.BAD_REQUEST, "tool input must be a JSON object", operation=tool_name, step="input")
                 return
             self._merge_expected_fingerprint(tool_input, expected_fingerprint)
-            self._execute_tool_wrapper(tool_name, tool_input)
+            self._execute_tool_request(tool_name, tool_input)
             return
 
         self._write_error(HTTPStatus.NOT_FOUND, "not_found", kind="not_found")
@@ -240,7 +323,7 @@ class DeepPlanHandler(BaseHTTPRequestHandler):
             return
         self._write_json(HTTPStatus.OK, result, extra_headers=self._etag_headers(result.get("fingerprint")))
 
-    def _execute_tool_wrapper(self, tool_name: str, tool_input: Dict[str, Any]) -> None:
+    def _execute_tool_request(self, tool_name: str, tool_input: Dict[str, Any]) -> None:
         try:
             result = execute_tool(tool_name, tool_input)
         except PlanConflictError as exc:
@@ -266,6 +349,59 @@ class DeepPlanHandler(BaseHTTPRequestHandler):
             return
         headers = self._etag_headers(result.get("fingerprint"))
         self._write_json(HTTPStatus.OK, {"tool": tool_name, "input": tool_input, "result": result}, extra_headers=headers)
+
+    def _tool_catalog_response(self) -> Dict[str, Any]:
+        tools = list_tools()
+        mutation_tool_count = sum(1 for tool in tools if self._tool_kind(tool) == "mutation")
+        read_tool_count = len(tools) - mutation_tool_count
+        return {
+            "ok": True,
+            "result_type": "tool_catalog",
+            "contract_version": CONTRACT_VERSION,
+            "implementation_version": IMPLEMENTATION_VERSION,
+            "catalog": {
+                "authoritative": True,
+                "transport": "http",
+                "list_endpoint": "/tools",
+                "detail_endpoint_template": "/tools/{tool_name}",
+                "execute_endpoint": "/tools/execute",
+                "legacy_execute_endpoint_template": "/tools/{tool_name}",
+                "tool_count": len(tools),
+                "read_tool_count": read_tool_count,
+                "mutation_tool_count": mutation_tool_count,
+            },
+            "tools": [self._tool_descriptor(tool) for tool in tools],
+        }
+
+    def _tool_detail_response(self, tool: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "ok": True,
+            "result_type": "tool_detail",
+            "contract_version": CONTRACT_VERSION,
+            "implementation_version": IMPLEMENTATION_VERSION,
+            "tool": self._tool_descriptor(tool),
+        }
+
+    def _tool_descriptor(self, tool: Dict[str, Any]) -> Dict[str, Any]:
+        descriptor = dict(tool)
+        descriptor["kind"] = self._tool_kind(tool)
+        descriptor["execute_via"] = {
+            "generic": "/tools/execute",
+            "legacy_wrapper": f"/tools/{tool['name']}",
+        }
+        return descriptor
+
+    def _tool_schema(self, tool_name: str) -> Optional[Dict[str, Any]]:
+        if not tool_name:
+            return None
+        for tool in list_tools():
+            if tool.get("name") == tool_name:
+                return tool
+        return None
+
+    def _tool_kind(self, tool: Dict[str, Any]) -> str:
+        properties = tool.get("input_schema", {}).get("properties", {})
+        return "mutation" if "expected_fingerprint" in properties else "read"
 
     def _error_code_for(self, status: HTTPStatus, kind: str, message: str) -> str:
         if status == HTTPStatus.PRECONDITION_FAILED and message == "plan fingerprint mismatch":

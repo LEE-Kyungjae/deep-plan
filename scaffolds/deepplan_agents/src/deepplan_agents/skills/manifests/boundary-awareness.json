@@ -1,0 +1,11 @@
+{
+  "name": "boundary-awareness",
+  "version": "v1",
+  "role": "researcher",
+  "summary": "Prevent drift from planning research into execution orchestration.",
+  "depends_on_capabilities": ["plan.read", "review.request"],
+  "preferred_actions": ["request_review"],
+  "escalation_actions": [],
+  "input_signals": ["goal", "constraints", "review_reason"],
+  "prompt_asset": "prompts/boundary-awareness.md"
+}

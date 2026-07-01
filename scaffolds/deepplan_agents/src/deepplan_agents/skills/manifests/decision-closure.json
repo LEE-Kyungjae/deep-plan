@@ -1,0 +1,11 @@
+{
+  "name": "decision-closure",
+  "version": "v1",
+  "role": "reviewer",
+  "summary": "Close review loops with explicit rationale and resolution state.",
+  "depends_on_capabilities": ["plan.read", "review.request", "review.resolve"],
+  "preferred_actions": ["resolve_review"],
+  "escalation_actions": ["request_review"],
+  "input_signals": ["status", "resolution", "review_reason"],
+  "prompt_asset": "prompts/decision-closure.md"
+}

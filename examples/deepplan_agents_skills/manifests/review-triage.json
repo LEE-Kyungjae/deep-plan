@@ -1,0 +1,10 @@
+{
+  "name": "review-triage",
+  "version": "v1",
+  "role": "reviewer",
+  "summary": "Prioritize open review work using queue metadata such as priority and stale_after.",
+  "depends_on_capabilities": ["plan.read", "review.resolve"],
+  "preferred_actions": ["resolve_review"],
+  "escalation_actions": ["request_review"],
+  "input_signals": ["priority", "stale_after", "sla_bucket", "review_recommendation"]
+}

@@ -189,6 +189,23 @@ def validate_evidence_item(item, index: int) -> List[str]:
     axis = item.get("axis", "")
     if axis != "" and not isinstance(axis, str):
         errors.append(f"{prefix}.axis must be a string")
+    for key in [
+        "reference",
+        "source_url",
+        "field",
+        "selector",
+        "note",
+        "evidence_type",
+        "review_recommendation",
+        "review_reason",
+    ]:
+        value = item.get(key, "")
+        if value != "" and not isinstance(value, str):
+            errors.append(f"{prefix}.{key} must be a string")
+    for key in ["observed_value", "expected_value"]:
+        value = item.get(key)
+        if key in item and not _is_json_value(value):
+            errors.append(f"{prefix}.{key} must be valid JSON data")
     return errors
 
 
@@ -218,17 +235,48 @@ def validate_reference_discovery_item(item, index: int) -> List[str]:
     for key in ["ts", "question", "search_mode"]:
         if not isinstance(item.get(key), str) or not item.get(key, "").strip():
             errors.append(f"{prefix}.{key} must be a non-empty string")
-    for key in ["trigger_signals", "selection_criteria", "candidate_queries", "shortlisted_references", "rejected_references"]:
+    for key in [
+        "trigger_signals",
+        "selection_criteria",
+        "candidate_queries",
+        "shortlisted_references",
+        "rejected_references",
+        "source_urls",
+    ]:
         value = item.get(key)
         if not isinstance(value, list):
             errors.append(f"{prefix}.{key} must be an array")
             continue
         if not all(isinstance(entry, str) and entry.strip() for entry in value):
             errors.append(f"{prefix}.{key} must contain only non-empty strings")
-    for key in ["context", "decision", "notes"]:
+    for key in ["context", "decision", "notes", "review_recommendation", "review_reason"]:
         value = item.get(key, "")
         if value != "" and not isinstance(value, str):
             errors.append(f"{prefix}.{key} must be a string")
+    return errors
+
+
+def validate_human_escalation_item(item, index: int) -> List[str]:
+    errors: List[str] = []
+    prefix = f"human_escalations[{index}]"
+    if not isinstance(item, dict):
+        return [f"{prefix} must be an object"]
+    for key in ["id", "status", "reason", "scope", "requested_at", "requested_by"]:
+        if not isinstance(item.get(key), str) or not item.get(key, "").strip():
+            errors.append(f"{prefix}.{key} must be a non-empty string")
+    for key in ["review_recommendation", "review_reason", "resolution", "resolved_at", "resolved_by", "priority", "assigned_to", "stale_after", "sla_bucket"]:
+        value = item.get(key, "")
+        if value != "" and not isinstance(value, str):
+            errors.append(f"{prefix}.{key} must be a string")
+    for key in ["related_evidence", "related_references"]:
+        if key not in item:
+            continue
+        value = item.get(key)
+        if not isinstance(value, list):
+            errors.append(f"{prefix}.{key} must be an array")
+            continue
+        if not all(isinstance(entry, str) and entry.strip() for entry in value):
+            errors.append(f"{prefix}.{key} must contain only non-empty strings")
     return errors
 
 
@@ -263,6 +311,9 @@ def validate_plan_shape(plan: Dict) -> Dict:
     if isinstance(plan.get("reference_discoveries"), list):
         for index, item in enumerate(plan["reference_discoveries"]):
             errors.extend(validate_reference_discovery_item(item, index))
+    if isinstance(plan.get("human_escalations"), list):
+        for index, item in enumerate(plan["human_escalations"]):
+            errors.extend(validate_human_escalation_item(item, index))
 
     return {"valid": len(errors) == 0, "errors": errors}
 
@@ -1309,14 +1360,44 @@ def normalize_axis_label(v: str) -> str:
     return aliases.get(value, value)
 
 
-def evidence_object(claim: str, source: str, confidence: int, axis: str = "", evidence_date: str = "") -> Dict:
-    return {
+def _is_json_scalar(value: Any) -> bool:
+    return value is None or isinstance(value, (str, int, float, bool))
+
+
+def _is_json_value(value: Any) -> bool:
+    if _is_json_scalar(value):
+        return True
+    if isinstance(value, list):
+        return all(_is_json_value(item) for item in value)
+    if isinstance(value, dict):
+        return all(isinstance(key, str) and _is_json_value(item) for key, item in value.items())
+    return False
+
+
+def evidence_object(
+    claim: str,
+    source: str,
+    confidence: int,
+    axis: str = "",
+    evidence_date: str = "",
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict:
+    record = {
         "claim": claim.strip(),
         "source": source.strip() if source else "manual",
         "confidence": max(0, min(100, confidence)),
         "axis": normalize_axis_label(axis) if axis else "",
         "date": evidence_date.strip() if evidence_date else date.today().isoformat(),
     }
+    for key, value in (metadata or {}).items():
+        if isinstance(value, str):
+            if value.strip():
+                record[key] = value.strip()
+        elif _is_json_value(value):
+            record[key] = value
+        elif isinstance(value, list) and all(isinstance(item, str) and item.strip() for item in value):
+            record[key] = [item.strip() for item in value]
+    return record
 
 
 def legacy_evidence_object(entry: str) -> Dict:
@@ -1347,8 +1428,18 @@ def evidence_objects(plan: Dict) -> List[Dict]:
     return items
 
 
-def add_evidence(plan: Dict, claim: str, source: str, confidence: int = 60, axis: str = "", evidence_date: str = "") -> None:
-    plan.setdefault("evidence", []).append(evidence_object(claim, source, confidence, axis, evidence_date))
+def add_evidence(
+    plan: Dict,
+    claim: str,
+    source: str,
+    confidence: int = 60,
+    axis: str = "",
+    evidence_date: str = "",
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    plan.setdefault("evidence", []).append(
+        evidence_object(claim, source, confidence, axis, evidence_date, metadata=metadata)
+    )
 
 
 def infer_reference_trigger_signals(question: str, context: str = "") -> List[str]:
@@ -1393,11 +1484,21 @@ def compact_topic_slug(question: str, fallback: str = "topic") -> str:
     return "-".join(selected) if selected else fallback
 
 
-def build_reference_discovery_pack(question: str, context: str = "", references: Optional[List[str]] = None, rejected: Optional[List[str]] = None) -> Dict[str, Any]:
+def build_reference_discovery_pack(
+    question: str,
+    context: str = "",
+    references: Optional[List[str]] = None,
+    rejected: Optional[List[str]] = None,
+    source_urls: Optional[List[str]] = None,
+    notes: str = "",
+    review_recommendation: str = "",
+    review_reason: str = "",
+) -> Dict[str, Any]:
     clean_question = ensure_non_empty_text(question, "question")
     clean_context = context.strip()
     shortlisted = [item.strip() for item in references or [] if isinstance(item, str) and item.strip()]
     rejected_items = [item.strip() for item in rejected or [] if isinstance(item, str) and item.strip()]
+    clean_source_urls = [item.strip() for item in source_urls or [] if isinstance(item, str) and item.strip()]
     search_mode = infer_reference_search_mode(clean_question, clean_context)
     trigger_signals = infer_reference_trigger_signals(clean_question, clean_context)
     topic_slug = compact_topic_slug(clean_question)
@@ -1455,7 +1556,10 @@ def build_reference_discovery_pack(question: str, context: str = "", references:
         "shortlisted_references": shortlisted,
         "rejected_references": rejected_items,
         "decision": decision,
-        "notes": "",
+        "notes": notes.strip(),
+        "source_urls": clean_source_urls,
+        "review_recommendation": review_recommendation.strip(),
+        "review_reason": review_reason.strip(),
         "plan_updates": plan_updates,
     }
 
@@ -1471,8 +1575,11 @@ def reference_discovery_record(pack: Dict[str, Any]) -> Dict[str, Any]:
         "candidate_queries": [item.strip() for item in pack.get("candidate_queries", []) if isinstance(item, str) and item.strip()],
         "shortlisted_references": [item.strip() for item in pack.get("shortlisted_references", []) if isinstance(item, str) and item.strip()],
         "rejected_references": [item.strip() for item in pack.get("rejected_references", []) if isinstance(item, str) and item.strip()],
+        "source_urls": [item.strip() for item in pack.get("source_urls", []) if isinstance(item, str) and item.strip()],
         "decision": str(pack.get("decision", "")).strip(),
         "notes": str(pack.get("notes", "")).strip(),
+        "review_recommendation": str(pack.get("review_recommendation", "")).strip(),
+        "review_reason": str(pack.get("review_reason", "")).strip(),
     }
 
 

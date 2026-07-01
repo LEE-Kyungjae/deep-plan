@@ -3,6 +3,7 @@ import argparse
 import json
 import shlex
 from typing import Any, Dict, List, Optional, Tuple
+from uuid import uuid4
 
 from deepplan import (
     add_evidence,
@@ -64,6 +65,101 @@ LIST_PLAN_FIELDS = [
 ]
 
 TOOL_SCHEMAS: List[Dict[str, Any]] = [
+    {
+        "name": "get_review",
+        "description": "Return one human-review escalation record by request identifier.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "request_id": {"type": "string"},
+            },
+            "required": ["request_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "list_reviews",
+        "description": "List human-review escalation records from the current plan state.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "status": {"type": "string"},
+                "scope": {"type": "string"},
+                "assigned_to": {"type": "string"},
+                "sort_by": {"type": "string", "enum": ["requested_at", "priority", "status", "stale_after"]},
+                "order": {"type": "string", "enum": ["asc", "desc"]},
+                "limit": {"type": "integer"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "request_review",
+        "description": "Append a human-review escalation record to the current plan state.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "expected_fingerprint": {"type": "string"},
+                "idempotency_key": {"type": "string"},
+                "request_id": {"type": "string"},
+                "scope": {"type": "string"},
+                "reason": {"type": "string"},
+                "requested_by": {"type": "string"},
+                "status": {"type": "string", "enum": ["open", "acknowledged", "resolved", "dismissed"]},
+                "priority": {"type": "string"},
+                "assigned_to": {"type": "string"},
+                "stale_after": {"type": "string"},
+                "sla_bucket": {"type": "string"},
+                "review_recommendation": {"type": "string"},
+                "review_reason": {"type": "string"},
+                "related_evidence": {"type": "array", "items": {"type": "string"}},
+                "related_references": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["scope", "reason"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "resolve_review",
+        "description": "Update an existing human-review escalation record by request identifier.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "expected_fingerprint": {"type": "string"},
+                "idempotency_key": {"type": "string"},
+                "request_id": {"type": "string"},
+                "status": {"type": "string", "enum": ["acknowledged", "resolved", "dismissed"]},
+                "resolution": {"type": "string"},
+                "resolved_by": {"type": "string"},
+                "assigned_to": {"type": "string"},
+                "review_recommendation": {"type": "string"},
+                "review_reason": {"type": "string"},
+            },
+            "required": ["request_id", "status"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "update_review",
+        "description": "Update triage fields on an existing human-review escalation record without changing status.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "expected_fingerprint": {"type": "string"},
+                "idempotency_key": {"type": "string"},
+                "request_id": {"type": "string"},
+                "priority": {"type": "string"},
+                "assigned_to": {"type": "string"},
+                "stale_after": {"type": "string"},
+                "sla_bucket": {"type": "string"},
+                "review_recommendation": {"type": "string"},
+                "review_reason": {"type": "string"},
+                "resolution": {"type": "string"},
+            },
+            "required": ["request_id"],
+            "additionalProperties": False,
+        },
+    },
     {
         "name": "get_plan",
         "description": "Return the current DeepPlan plan and derived summary.",
@@ -129,6 +225,10 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
                 "context": {"type": "string"},
                 "references": {"type": "array", "items": {"type": "string"}},
                 "rejected": {"type": "array", "items": {"type": "string"}},
+                "source_urls": {"type": "array", "items": {"type": "string"}},
+                "notes": {"type": "string"},
+                "review_recommendation": {"type": "string", "enum": ["", "none", "human_review", "reviewer_agent"]},
+                "review_reason": {"type": "string"},
                 "apply": {"type": "boolean"},
             },
             "additionalProperties": False,
@@ -152,6 +252,15 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
                         "axis": {"type": "string"},
                         "date": {"type": "string"},
                         "reference": {"type": "string"},
+                        "source_url": {"type": "string"},
+                        "field": {"type": "string"},
+                        "selector": {"type": "string"},
+                        "observed_value": {},
+                        "expected_value": {},
+                        "note": {"type": "string"},
+                        "evidence_type": {"type": "string"},
+                        "review_recommendation": {"type": "string", "enum": ["", "none", "human_review", "reviewer_agent"]},
+                        "review_reason": {"type": "string"},
                     },
                     "required": ["claim"],
                     "additionalProperties": False,
@@ -283,6 +392,15 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
                 "axis": {"type": "string"},
                 "date": {"type": "string"},
                 "reference": {"type": "string"},
+                "source_url": {"type": "string"},
+                "field": {"type": "string"},
+                "selector": {"type": "string"},
+                "observed_value": {},
+                "expected_value": {},
+                "note": {"type": "string"},
+                "evidence_type": {"type": "string"},
+                "review_recommendation": {"type": "string", "enum": ["", "none", "human_review", "reviewer_agent"]},
+                "review_reason": {"type": "string"},
             },
             "required": ["claim"],
             "additionalProperties": False,
@@ -314,6 +432,8 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
 ]
 
 TOOL_VALIDATORS = {
+    "get_review": "validate_get_review_payload",
+    "list_reviews": "validate_list_reviews_payload",
     "get_history": "validate_history_payload",
     "restore_revision": "validate_restore_payload",
     "preview_restore": "validate_preview_restore_payload",
@@ -321,6 +441,9 @@ TOOL_VALIDATORS = {
     "capture_evidence_cycle": "validate_capture_evidence_cycle_payload",
     "replan": "validate_replan_payload",
     "update_plan": "validate_update_payload",
+    "request_review": "validate_request_review_payload",
+    "resolve_review": "validate_resolve_review_payload",
+    "update_review": "validate_update_review_payload",
     "add_evidence": "validate_evidence_payload",
     "add_hypothesis": "validate_hypothesis_payload",
 }
@@ -331,6 +454,9 @@ MUTATION_TOOLS = {
     "capture_evidence_cycle",
     "replan",
     "update_plan",
+    "request_review",
+    "resolve_review",
+    "update_review",
     "add_evidence",
     "add_hypothesis",
 }
@@ -339,6 +465,16 @@ MUTATION_TOOLS = {
 def ensure_object_payload(payload: Dict[str, Any]) -> None:
     if not isinstance(payload, dict):
         raise ValueError("payload must be a JSON object")
+
+
+def is_json_value(value: Any) -> bool:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return True
+    if isinstance(value, list):
+        return all(is_json_value(item) for item in value)
+    if isinstance(value, dict):
+        return all(isinstance(key, str) and is_json_value(item) for key, item in value.items())
+    return False
 
 
 def validate_expected_fingerprint(payload: Dict[str, Any]) -> None:
@@ -381,12 +517,39 @@ def validate_update_payload(payload: Dict[str, Any]) -> None:
             raise ValueError(f"{field} must contain only strings")
 
 
+def validate_get_review_payload(payload: Dict[str, Any]) -> None:
+    ensure_object_payload(payload)
+    allowed = {"request_id"}
+    unknown = sorted(set(payload) - allowed)
+    if unknown:
+        raise ValueError(f"unknown get_review fields: {', '.join(unknown)}")
+    if not isinstance(payload.get("request_id"), str) or not str(payload.get("request_id", "")).strip():
+        raise ValueError("request_id is required")
+
+
 def validate_history_payload(payload: Dict[str, Any]) -> None:
     ensure_object_payload(payload)
     allowed = {"limit"}
     unknown = sorted(set(payload) - allowed)
     if unknown:
         raise ValueError(f"unknown get_history fields: {', '.join(unknown)}")
+    if "limit" in payload and (not isinstance(payload["limit"], int) or isinstance(payload["limit"], bool)):
+        raise ValueError("limit must be an integer")
+
+
+def validate_list_reviews_payload(payload: Dict[str, Any]) -> None:
+    ensure_object_payload(payload)
+    allowed = {"status", "scope", "assigned_to", "sort_by", "order", "limit"}
+    unknown = sorted(set(payload) - allowed)
+    if unknown:
+        raise ValueError(f"unknown list_reviews fields: {', '.join(unknown)}")
+    for key in ["status", "scope", "assigned_to", "sort_by", "order"]:
+        if key in payload and not isinstance(payload[key], str):
+            raise ValueError(f"{key} must be a string")
+    if "sort_by" in payload and str(payload.get("sort_by", "")).strip() not in {"requested_at", "priority", "status", "stale_after"}:
+        raise ValueError("sort_by must be one of: requested_at, priority, status, stale_after")
+    if "order" in payload and str(payload.get("order", "")).strip() not in {"asc", "desc"}:
+        raise ValueError("order must be one of: asc, desc")
     if "limit" in payload and (not isinstance(payload["limit"], int) or isinstance(payload["limit"], bool)):
         raise ValueError("limit must be an integer")
 
@@ -426,32 +589,75 @@ def validate_evidence_payload(payload: Dict[str, Any]) -> None:
     ensure_object_payload(payload)
     validate_expected_fingerprint(payload)
     validate_idempotency_key(payload)
-    allowed = {"claim", "source", "confidence", "axis", "date", "reference", "expected_fingerprint", "idempotency_key"}
+    allowed = {
+        "claim",
+        "source",
+        "confidence",
+        "axis",
+        "date",
+        "reference",
+        "source_url",
+        "field",
+        "selector",
+        "observed_value",
+        "expected_value",
+        "note",
+        "evidence_type",
+        "review_recommendation",
+        "review_reason",
+        "expected_fingerprint",
+        "idempotency_key",
+    }
     unknown = sorted(set(payload) - allowed)
     if unknown:
         raise ValueError(f"unknown add_evidence fields: {', '.join(unknown)}")
     claim = payload.get("claim", "")
     if not isinstance(claim, str) or not claim.strip():
         raise ValueError("claim is required")
-    for key in ["source", "axis", "date", "reference"]:
+    for key in [
+        "source",
+        "axis",
+        "date",
+        "reference",
+        "source_url",
+        "field",
+        "selector",
+        "note",
+        "evidence_type",
+        "review_recommendation",
+        "review_reason",
+    ]:
         if key in payload and not isinstance(payload[key], str):
             raise ValueError(f"{key} must be a string")
     if "confidence" in payload and (not isinstance(payload["confidence"], int) or isinstance(payload["confidence"], bool)):
         raise ValueError("confidence must be an integer")
+    for key in ["observed_value", "expected_value"]:
+        if key in payload and not is_json_value(payload[key]):
+            raise ValueError(f"{key} must be valid JSON data")
 
 
 def validate_reference_discovery_payload(payload: Dict[str, Any]) -> None:
     ensure_object_payload(payload)
     validate_expected_fingerprint(payload)
-    allowed = {"expected_fingerprint", "question", "context", "references", "rejected", "apply"}
+    allowed = {
+        "expected_fingerprint",
+        "question",
+        "context",
+        "references",
+        "rejected",
+        "source_urls",
+        "notes",
+        "review_recommendation",
+        "review_reason",
+        "apply",
+    }
     unknown = sorted(set(payload) - allowed)
     if unknown:
         raise ValueError(f"unknown run_reference_discovery fields: {', '.join(unknown)}")
-    if "question" in payload and not isinstance(payload["question"], str):
-        raise ValueError("question must be a string")
-    if "context" in payload and not isinstance(payload["context"], str):
-        raise ValueError("context must be a string")
-    for key in ["references", "rejected"]:
+    for key in ["question", "context", "notes", "review_recommendation", "review_reason"]:
+        if key in payload and not isinstance(payload[key], str):
+            raise ValueError(f"{key} must be a string")
+    for key in ["references", "rejected", "source_urls"]:
         if key not in payload:
             continue
         value = payload[key]
@@ -560,8 +766,116 @@ def merge_plan_updates(plan: Dict[str, Any], payload: Dict[str, Any]) -> Dict[st
     return plan
 
 
+def validate_request_review_payload(payload: Dict[str, Any]) -> None:
+    ensure_object_payload(payload)
+    validate_expected_fingerprint(payload)
+    validate_idempotency_key(payload)
+    allowed = {
+        "expected_fingerprint",
+        "idempotency_key",
+        "request_id",
+        "scope",
+        "reason",
+        "requested_by",
+        "status",
+        "priority",
+        "assigned_to",
+        "stale_after",
+        "sla_bucket",
+        "review_recommendation",
+        "review_reason",
+        "related_evidence",
+        "related_references",
+    }
+    unknown = sorted(set(payload) - allowed)
+    if unknown:
+        raise ValueError(f"unknown request_review fields: {', '.join(unknown)}")
+    for key in ["request_id", "scope", "reason", "requested_by", "status", "priority", "assigned_to", "stale_after", "sla_bucket", "review_recommendation", "review_reason"]:
+        if key in payload and not isinstance(payload[key], str):
+            raise ValueError(f"{key} must be a string")
+    for key in ["scope", "reason"]:
+        if not isinstance(payload.get(key), str) or not str(payload.get(key, "")).strip():
+            raise ValueError(f"{key} is required")
+    for key in ["related_evidence", "related_references"]:
+        if key not in payload:
+            continue
+        value = payload[key]
+        if not isinstance(value, list):
+            raise ValueError(f"{key} must be an array")
+        if not all(isinstance(item, str) and item.strip() for item in value):
+            raise ValueError(f"{key} must contain only non-empty strings")
+
+
+def validate_resolve_review_payload(payload: Dict[str, Any]) -> None:
+    ensure_object_payload(payload)
+    validate_expected_fingerprint(payload)
+    validate_idempotency_key(payload)
+    allowed = {
+        "expected_fingerprint",
+        "idempotency_key",
+        "request_id",
+        "status",
+        "resolution",
+        "resolved_by",
+        "assigned_to",
+        "review_recommendation",
+        "review_reason",
+    }
+    unknown = sorted(set(payload) - allowed)
+    if unknown:
+        raise ValueError(f"unknown resolve_review fields: {', '.join(unknown)}")
+    for key in ["request_id", "status", "resolution", "resolved_by", "assigned_to", "review_recommendation", "review_reason"]:
+        if key in payload and not isinstance(payload[key], str):
+            raise ValueError(f"{key} must be a string")
+    for key in ["request_id", "status"]:
+        if not isinstance(payload.get(key), str) or not str(payload.get(key, "")).strip():
+            raise ValueError(f"{key} is required")
+
+
+def validate_update_review_payload(payload: Dict[str, Any]) -> None:
+    ensure_object_payload(payload)
+    validate_expected_fingerprint(payload)
+    validate_idempotency_key(payload)
+    allowed = {
+        "expected_fingerprint",
+        "idempotency_key",
+        "request_id",
+        "priority",
+        "assigned_to",
+        "stale_after",
+        "sla_bucket",
+        "review_recommendation",
+        "review_reason",
+        "resolution",
+    }
+    unknown = sorted(set(payload) - allowed)
+    if unknown:
+        raise ValueError(f"unknown update_review fields: {', '.join(unknown)}")
+    if not isinstance(payload.get("request_id"), str) or not str(payload.get("request_id", "")).strip():
+        raise ValueError("request_id is required")
+    for key in ["priority", "assigned_to", "stale_after", "sla_bucket", "review_recommendation", "review_reason", "resolution"]:
+        if key in payload and not isinstance(payload[key], str):
+            raise ValueError(f"{key} must be a string")
+    mutable_fields = {"priority", "assigned_to", "stale_after", "sla_bucket", "review_recommendation", "review_reason", "resolution"}
+    if not any(key in payload for key in mutable_fields):
+        raise ValueError("at least one review field must be provided")
+
+
 def list_tools() -> List[Dict[str, Any]]:
     return TOOL_SCHEMAS
+
+
+def review_priority_rank(value: Any) -> int:
+    priority = str(value or "").strip().lower()
+    ranks = {
+        "critical": 4,
+        "high": 3,
+        "normal": 2,
+        "medium": 2,
+        "low": 1,
+        "": 0,
+    }
+    return ranks.get(priority, 0)
 
 
 def enrich_tool_result(name: str, result_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -592,6 +906,11 @@ def finalize_idempotent_tool_result(name: str, payload: Dict[str, Any], result: 
 def tool_schema_contract_report() -> Dict[str, Any]:
     schema_names = {item["name"] for item in TOOL_SCHEMAS}
     expected_names = {
+        "get_review",
+        "list_reviews",
+        "request_review",
+        "resolve_review",
+        "update_review",
         "get_plan",
         "get_qa",
         "get_health",
@@ -643,6 +962,276 @@ def execute_tool(name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     if name == "get_plan":
         plan = load_plan()
         return enrich_tool_result(name, "plan", plan_response(plan))
+
+    if name == "get_review":
+        validate_get_review_payload(payload)
+        request_id = str(payload.get("request_id", "")).strip()
+        plan = load_plan()
+        review_request = next(
+            (
+                item
+                for item in plan.get("human_escalations", [])
+                if isinstance(item, dict) and str(item.get("id", "")).strip() == request_id
+            ),
+            None,
+        )
+        if not review_request:
+            raise ValueError(f"unknown review request: {request_id}")
+        return enrich_tool_result(
+            name,
+            "review",
+            {
+                "review": review_request,
+            },
+        )
+
+    if name == "list_reviews":
+        validate_list_reviews_payload(payload)
+        plan = load_plan()
+        status_filter = str(payload.get("status", "")).strip()
+        scope_filter = str(payload.get("scope", "")).strip()
+        assigned_to_filter = str(payload.get("assigned_to", "")).strip()
+        sort_by = str(payload.get("sort_by", "")).strip() or "requested_at"
+        order = str(payload.get("order", "")).strip() or "desc"
+        limit = int(payload.get("limit", 20) or 20)
+        items = [
+            item
+            for item in plan.get("human_escalations", [])
+            if isinstance(item, dict)
+            and (not status_filter or str(item.get("status", "")).strip() == status_filter)
+            and (not scope_filter or str(item.get("scope", "")).strip() == scope_filter)
+            and (not assigned_to_filter or str(item.get("assigned_to", "")).strip() == assigned_to_filter)
+        ]
+        reverse = order == "desc"
+        if sort_by == "priority":
+            items = sorted(
+                items,
+                key=lambda item: (
+                    review_priority_rank(item.get("priority", "")),
+                    str(item.get("requested_at", "")).strip(),
+                    str(item.get("id", "")).strip(),
+                ),
+                reverse=reverse,
+            )
+        elif sort_by == "status":
+            items = sorted(
+                items,
+                key=lambda item: (
+                    str(item.get("status", "")).strip(),
+                    str(item.get("requested_at", "")).strip(),
+                    str(item.get("id", "")).strip(),
+                ),
+                reverse=reverse,
+            )
+        elif sort_by == "stale_after":
+            items_with_deadline = [
+                item for item in items if str(item.get("stale_after", "")).strip()
+            ]
+            items_without_deadline = [
+                item for item in items if not str(item.get("stale_after", "")).strip()
+            ]
+            items_with_deadline = sorted(
+                items_with_deadline,
+                key=lambda item: (
+                    str(item.get("stale_after", "")).strip(),
+                    str(item.get("requested_at", "")).strip(),
+                    str(item.get("id", "")).strip(),
+                ),
+                reverse=reverse,
+            )
+            items = items_with_deadline + items_without_deadline
+        else:
+            items = sorted(
+                items,
+                key=lambda item: str(item.get("requested_at", "")).strip(),
+                reverse=reverse,
+            )
+        items = items[: max(0, limit)]
+        return enrich_tool_result(
+            name,
+            "reviews",
+            {
+                "reviews": items,
+                "count": len(items),
+                "filters": {
+                    "status": status_filter,
+                    "scope": scope_filter,
+                    "assigned_to": assigned_to_filter,
+                    "sort_by": sort_by,
+                    "order": order,
+                    "limit": limit,
+                },
+            },
+        )
+
+    if name == "request_review":
+        validate_request_review_payload(payload)
+        replayed = maybe_replay_idempotent_tool_result(name, payload)
+        if replayed:
+            return replayed
+        scope = str(payload.get("scope", "")).strip()
+        reason = str(payload.get("reason", "")).strip()
+        request_id = str(payload.get("request_id", "")).strip() or f"review-{uuid4().hex[:12]}"
+        request_record = {
+            "id": request_id,
+            "status": str(payload.get("status", "")).strip() or "open",
+            "scope": scope,
+            "reason": reason,
+            "requested_at": now_iso(),
+            "requested_by": str(payload.get("requested_by", "")).strip() or "deepplan",
+            "priority": str(payload.get("priority", "")).strip() or "normal",
+            "assigned_to": str(payload.get("assigned_to", "")).strip(),
+            "stale_after": str(payload.get("stale_after", "")).strip(),
+            "sla_bucket": str(payload.get("sla_bucket", "")).strip(),
+            "review_recommendation": str(payload.get("review_recommendation", "")).strip(),
+            "review_reason": str(payload.get("review_reason", "")).strip(),
+            "related_evidence": [item.strip() for item in payload.get("related_evidence", []) if isinstance(item, str) and item.strip()],
+            "related_references": [item.strip() for item in payload.get("related_references", []) if isinstance(item, str) and item.strip()],
+        }
+        plan = mutate_plan_state(
+            lambda current_plan: current_plan.setdefault("human_escalations", []).append(request_record),
+            event_payloads=[
+                {
+                    "ts": now_iso(),
+                    "type": "human_review_requested",
+                    "source": "request_review",
+                    "request_id": request_id,
+                    "scope": scope,
+                }
+            ],
+            expected_fingerprint=payload.get("expected_fingerprint"),
+            revision_source="request_review",
+            revision_reason=reason,
+        )
+        response = {
+            "plan": plan,
+            "review_request": request_record,
+            "summary": plan_summary(plan),
+            "validation": validate_plan_shape(plan),
+            "fingerprint": plan_response(plan)["fingerprint"],
+            "qa": qa_report(plan),
+        }
+        return enrich_tool_result(name, "mutation", finalize_idempotent_tool_result(name, payload, response))
+
+    if name == "resolve_review":
+        validate_resolve_review_payload(payload)
+        replayed = maybe_replay_idempotent_tool_result(name, payload)
+        if replayed:
+            return replayed
+        request_id = str(payload.get("request_id", "")).strip()
+        status = str(payload.get("status", "")).strip()
+        resolution = str(payload.get("resolution", "")).strip()
+        resolved_by = str(payload.get("resolved_by", "")).strip() or "deepplan"
+
+        def apply_resolution(current_plan: Dict[str, Any]) -> None:
+            escalations = current_plan.get("human_escalations", [])
+            if not isinstance(escalations, list):
+                raise ValueError("human_escalations must be an array")
+            for item in escalations:
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("id", "")).strip() != request_id:
+                    continue
+                item["status"] = status
+                item["resolved_at"] = now_iso()
+                item["resolved_by"] = resolved_by
+                if resolution:
+                    item["resolution"] = resolution
+                if "assigned_to" in payload:
+                    item["assigned_to"] = str(payload.get("assigned_to", "")).strip()
+                if "review_recommendation" in payload:
+                    item["review_recommendation"] = str(payload.get("review_recommendation", "")).strip()
+                if "review_reason" in payload:
+                    item["review_reason"] = str(payload.get("review_reason", "")).strip()
+                return
+            raise ValueError(f"unknown review request: {request_id}")
+
+        plan = mutate_plan_state(
+            apply_resolution,
+            event_payloads=[
+                {
+                    "ts": now_iso(),
+                    "type": "human_review_updated",
+                    "source": "resolve_review",
+                    "request_id": request_id,
+                    "status": status,
+                }
+            ],
+            expected_fingerprint=payload.get("expected_fingerprint"),
+            revision_source="resolve_review",
+            revision_reason=f"{request_id}:{status}",
+        )
+        review_request = next(
+            (
+                item
+                for item in plan.get("human_escalations", [])
+                if isinstance(item, dict) and str(item.get("id", "")).strip() == request_id
+            ),
+            None,
+        )
+        response = {
+            "plan": plan,
+            "review_request": review_request or {},
+            "summary": plan_summary(plan),
+            "validation": validate_plan_shape(plan),
+            "fingerprint": plan_response(plan)["fingerprint"],
+            "qa": qa_report(plan),
+        }
+        return enrich_tool_result(name, "mutation", finalize_idempotent_tool_result(name, payload, response))
+
+    if name == "update_review":
+        validate_update_review_payload(payload)
+        replayed = maybe_replay_idempotent_tool_result(name, payload)
+        if replayed:
+            return replayed
+        request_id = str(payload.get("request_id", "")).strip()
+
+        def apply_update(current_plan: Dict[str, Any]) -> None:
+            escalations = current_plan.get("human_escalations", [])
+            if not isinstance(escalations, list):
+                raise ValueError("human_escalations must be an array")
+            for item in escalations:
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("id", "")).strip() != request_id:
+                    continue
+                for key in ["priority", "assigned_to", "stale_after", "sla_bucket", "review_recommendation", "review_reason", "resolution"]:
+                    if key in payload:
+                        item[key] = str(payload.get(key, "")).strip()
+                return
+            raise ValueError(f"unknown review request: {request_id}")
+
+        plan = mutate_plan_state(
+            apply_update,
+            event_payloads=[
+                {
+                    "ts": now_iso(),
+                    "type": "human_review_triaged",
+                    "source": "update_review",
+                    "request_id": request_id,
+                }
+            ],
+            expected_fingerprint=payload.get("expected_fingerprint"),
+            revision_source="update_review",
+            revision_reason=request_id,
+        )
+        review_request = next(
+            (
+                item
+                for item in plan.get("human_escalations", [])
+                if isinstance(item, dict) and str(item.get("id", "")).strip() == request_id
+            ),
+            None,
+        )
+        response = {
+            "plan": plan,
+            "review_request": review_request or {},
+            "summary": plan_summary(plan),
+            "validation": validate_plan_shape(plan),
+            "fingerprint": plan_response(plan)["fingerprint"],
+            "qa": qa_report(plan),
+        }
+        return enrich_tool_result(name, "mutation", finalize_idempotent_tool_result(name, payload, response))
 
     if name == "get_qa":
         return enrich_tool_result(name, "qa", qa_report(load_plan()))
@@ -699,6 +1288,10 @@ def execute_tool(name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
             context=str(payload.get("context", "")).strip(),
             references=payload.get("references", []),
             rejected=payload.get("rejected", []),
+            source_urls=payload.get("source_urls", []),
+            notes=str(payload.get("notes", "")).strip(),
+            review_recommendation=str(payload.get("review_recommendation", "")).strip(),
+            review_reason=str(payload.get("review_reason", "")).strip(),
         )
         response = {
             "question": pack["question"],
@@ -842,6 +1435,22 @@ def execute_tool(name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         if replayed:
             return replayed
         claim = str(payload.get("claim", "")).strip()
+        evidence_metadata = {
+            key: payload[key]
+            for key in [
+                "reference",
+                "source_url",
+                "field",
+                "selector",
+                "observed_value",
+                "expected_value",
+                "note",
+                "evidence_type",
+                "review_recommendation",
+                "review_reason",
+            ]
+            if key in payload
+        }
         plan = mutate_plan_state(
             lambda plan: (
                 add_evidence(
@@ -851,6 +1460,7 @@ def execute_tool(name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
                     int(payload.get("confidence", 60)),
                     str(payload.get("axis", "")).strip(),
                     str(payload.get("date", "")).strip(),
+                    evidence_metadata,
                 ),
                 plan.setdefault("references", []).append(payload["reference"].strip())
                 if isinstance(payload.get("reference"), str) and payload["reference"].strip()
@@ -945,6 +1555,8 @@ def slash_to_tool(command: str) -> Tuple[str, Dict[str, Any]]:
         "/deepplan.plan": "update_plan",
         "/deepplan.replan": "replan",
         "/deepplan.capture": "capture_evidence_cycle",
+        "/deepplan.review": "get_review",
+        "/deepplan.reviews": "list_reviews",
         "/deepplan.show": "get_plan",
         "/deepplan.history": "get_history",
         "/deepplan.restore": "restore_revision",
@@ -953,6 +1565,9 @@ def slash_to_tool(command: str) -> Tuple[str, Dict[str, Any]]:
         "/deepplan.health": "get_health",
         "/deepplan.qa": "get_qa",
         "/deepplan.validate": "validate_plan",
+        "/deepplan.review-request": "request_review",
+        "/deepplan.review-resolve": "resolve_review",
+        "/deepplan.review-update": "update_review",
         "/deepplan.evidence": "add_evidence",
         "/deepplan.hypothesis": "add_hypothesis",
     }
@@ -975,6 +1590,10 @@ def natural_language_to_tool(text: str) -> Tuple[str, Dict[str, Any]]:
         return "preview_restore", parse_assignment_tokens(shlex.split(stripped[len("preview restore ") :]))
     if lowered == "preview previous revision":
         return "preview_restore", {"previous": True}
+    if any(phrase in lowered for phrase in ["list reviews", "show reviews", "open reviews"]):
+        return "list_reviews", {}
+    if lowered.startswith("show review "):
+        return "get_review", parse_assignment_tokens(shlex.split(stripped[len("show review ") :]))
     if any(phrase in lowered for phrase in ["history", "revision history", "plan history"]):
         return "get_history", {}
     if any(phrase in lowered for phrase in ["validate plan", "plan validation", "check plan structure"]):
@@ -995,6 +1614,12 @@ def natural_language_to_tool(text: str) -> Tuple[str, Dict[str, Any]]:
         return "restore_revision", {"previous": True}
     if lowered.startswith("add evidence "):
         return "add_evidence", parse_assignment_tokens(shlex.split(stripped[len("add evidence ") :]))
+    if lowered.startswith("request review "):
+        return "request_review", parse_assignment_tokens(shlex.split(stripped[len("request review ") :]))
+    if lowered.startswith("resolve review "):
+        return "resolve_review", parse_assignment_tokens(shlex.split(stripped[len("resolve review ") :]))
+    if lowered.startswith("update review "):
+        return "update_review", parse_assignment_tokens(shlex.split(stripped[len("update review ") :]))
     if lowered.startswith("update plan "):
         return "update_plan", parse_assignment_tokens(shlex.split(stripped[len("update plan ") :]))
     if lowered.startswith("add hypothesis "):
