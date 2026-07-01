@@ -1,0 +1,11 @@
+{
+  "name": "desire-emotion-map",
+  "version": "v1",
+  "role": "strategist",
+  "summary": "Map emotional demand to payment, return, sharing, or quitting behavior.",
+  "depends_on_capabilities": ["plan.read", "strategy.evaluate"],
+  "preferred_actions": ["evaluate_experience_strategy"],
+  "escalation_actions": ["request_review"],
+  "input_signals": ["desire", "emotion", "fear", "status", "envy", "anger", "belonging"],
+  "prompt_asset": "prompts/desire-emotion-map.md"
+}

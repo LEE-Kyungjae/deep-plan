@@ -10,6 +10,7 @@ from deepplan_agents.runtime.host_events import build_error_event, build_success
 from deepplan_agents.workflows.planner_loop import PlannerLoop
 from deepplan_agents.workflows.research_loop import ResearchLoop
 from deepplan_agents.workflows.review_loop import ReviewLoop
+from deepplan_agents.workflows.strategy_loop import StrategyLoop
 
 
 CONTRACT_PATH = Path(__file__).resolve().parents[1] / "contracts" / "host-action-contract.json"
@@ -143,8 +144,12 @@ class HostStep:
 
             if action == "update_plan":
                 return PlannerLoop(self.adapter, role=self.role).run_event(payload)
+            if action == "evaluate_experience_strategy":
+                return StrategyLoop(self.adapter, role=self.role).run_event(payload)
             if action == "capture_evidence_cycle":
                 return ResearchLoop(self.adapter, role=self.role).run_event(payload, session_id=session_id, step_id=step_id)
+            if action == "run_reference_discovery":
+                return ResearchLoop(self.adapter, role=self.role).reference_event(payload, session_id=session_id, step_id=step_id)
             if action == "request_review":
                 return ReviewLoop(self.adapter, role=self.role).request_event(payload, session_id=session_id, step_id=step_id)
             if action == "resolve_review":

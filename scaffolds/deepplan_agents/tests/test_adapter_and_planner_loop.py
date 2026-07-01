@@ -18,6 +18,7 @@ from deepplan_agents.runtime.policies import apply_idempotency_policy, build_ide
 from deepplan_agents.workflows.planner_loop import PlannerLoop
 from deepplan_agents.workflows.research_loop import ResearchLoop
 from deepplan_agents.workflows.review_loop import ReviewLoop
+from deepplan_agents.workflows.strategy_loop import StrategyLoop, evaluate_strategy_payload, validate_strategy_report_shape
 
 
 class FakeDeepPlanClient:
@@ -112,6 +113,24 @@ class FakeDeepPlanClient:
             },
         }
 
+    def execute_tool(self, tool_name: str, payload: Dict[str, Any], *, expected_fingerprint: str = "") -> Dict[str, Any]:
+        self.calls.append(
+            (
+                tool_name,
+                {
+                    "payload": dict(payload),
+                    "expected_fingerprint": expected_fingerprint,
+                },
+            )
+        )
+        return {
+            "ok": True,
+            "tool_name": tool_name,
+            "result_type": "reference_discovery",
+            "fingerprint": "fp-after",
+            "result": {"applied": bool(payload.get("apply", False))},
+        }
+
     def preview_restore(self, *, previous: bool = False) -> Dict[str, Any]:
         self.calls.append(("preview_restore", {"previous": previous}))
         return {"selected_via": "previous" if previous else "revision_id"}
@@ -148,13 +167,14 @@ class DeepPlanAgentsAdapterTests(unittest.TestCase):
         adapter = DeepPlanAdapter(client, history_limit=3, require_healthy_writes=False)
 
         adapter.capture_evidence_cycle({"claim": "signal", "source": "call", "confidence": 70})
+        adapter.run_reference_discovery({"question": "Which references matter?", "apply": True})
         adapter.request_review({"scope": "plan", "reason": "Need reviewer"})
         adapter.resolve_review({"request_id": "review-1", "status": "resolved"})
         preview = adapter.preview_restore_previous()
         adapter.restore_previous()
 
         self.assertEqual(preview["selected_via"], "previous")
-        self.assertEqual([item[0] for item in client.calls], ["capture_evidence_cycle", "request_review", "resolve_review", "preview_restore", "restore_revision"])
+        self.assertEqual([item[0] for item in client.calls], ["capture_evidence_cycle", "run_reference_discovery", "get_cycle", "request_review", "resolve_review", "preview_restore", "restore_revision"])
         self.assertTrue(client.calls[0][1]["allow_retry"])
 
     def test_summarize_cycle_result_extracts_host_facing_fields(self):
@@ -264,6 +284,7 @@ class PlannerLoopTests(unittest.TestCase):
         self.assertEqual(required_capabilities_for_action("reviewer", "resolve_review"), ["review.resolve"])
         self.assertTrue(role_has_action_capabilities("reviewer", "resolve_review"))
         self.assertFalse(role_has_action_capabilities("reviewer", "update_plan"))
+        self.assertTrue(role_has_action_capabilities("researcher", "run_reference_discovery"))
         self.assertTrue(requested["ok"])
         self.assertEqual(requested["type"], "review_requested")
         self.assertFalse(denied["ok"])
@@ -352,6 +373,27 @@ class PlannerLoopTests(unittest.TestCase):
             ["get_cycle", "capture_evidence_cycle", "get_cycle", "capture_evidence_cycle"],
         )
 
+    def test_research_loop_runs_reference_discovery_with_runtime_session(self):
+        client = FakeDeepPlanClient()
+        adapter = DeepPlanAdapter(client, history_limit=4, require_healthy_writes=True)
+        loop = ResearchLoop(adapter)
+
+        event = loop.reference_event(
+            {
+                "question": "Which references prove this idea?",
+                "context": "AI planning checkpoint",
+                "references": ["failed AI wrappers"],
+                "apply": True,
+            },
+            session_id="session-42",
+            step_id="reference-1",
+        )
+
+        self.assertTrue(event["ok"])
+        self.assertEqual(event["type"], "reference_discovery_step")
+        self.assertEqual(event["summary"]["operation"], "run_reference_discovery")
+        self.assertIn("reference_discoveries", event["summary"]["changed_fields"])
+
     def test_review_loop_can_request_and_resolve_with_runtime_session(self):
         client = FakeDeepPlanClient()
         adapter = DeepPlanAdapter(client, history_limit=4, require_healthy_writes=True)
@@ -400,6 +442,103 @@ class PlannerLoopTests(unittest.TestCase):
                 "resolve_review",
             ],
         )
+
+    def test_strategy_loop_flags_generic_ideas_before_build(self):
+        client = FakeDeepPlanClient()
+        adapter = DeepPlanAdapter(client, history_limit=4, require_healthy_writes=True)
+        loop = StrategyLoop(adapter)
+
+        report = evaluate_strategy_payload(
+            {
+                "idea": "AI productivity dashboard and assistant",
+                "target_user": "builders",
+                "solution": "dashboard",
+            },
+            {"goal": "Build another AI tool"},
+        )
+        event = loop.run_event(
+            {
+                "idea": "AI productivity dashboard and assistant",
+                "target_user": "builders",
+                "solution": "dashboard",
+            }
+        )
+
+        self.assertIn("dashboard", report["generic_patterns"])
+        self.assertIn(report["decision"], {"revise_before_build", "stop_and_research"})
+        self.assertTrue(event["ok"])
+        self.assertEqual(event["type"], "strategy_step")
+        self.assertEqual(event["summary"]["operation"], "evaluate_experience_strategy")
+        self.assertIn("generic_llm_service_pattern", event["gate"]["reasons"])
+        self.assertIn("research_questions", event["result"]["strategy"])
+        self.assertIn("positioning_rewrite", event["result"]["strategy"])
+        self.assertIn("monetization_moment", event["result"]["strategy"])
+        self.assertIn("next_actions", event["result"]["strategy"])
+        self.assertEqual(event["result"]["strategy"]["next_actions"][0]["action"], "run_reference_discovery")
+        self.assertEqual(event["result"]["strategy"]["next_actions"][0]["target_role"], "researcher")
+        self.assertEqual(event["result"]["strategy"]["next_actions"][0]["priority"], "high")
+        self.assertEqual(validate_strategy_report_shape(event["result"]["strategy"]), [])
+
+    def test_strategy_loop_scores_experience_and_emotional_demand(self):
+        report = evaluate_strategy_payload(
+            {
+                "idea": "Pre-build decision checkpoint for AI builders",
+                "target_user": "solo AI builders",
+                "problem": "They waste weeks building generic services before validating demand.",
+                "current_alternative": "They ask coding agents to build immediately.",
+                "pain_frequency": "Every new product idea and weekly build cycle.",
+                "solution": "Challenge problem, desire, loop, monetization, and differentiation before build.",
+                "desire": "make more money and avoid wasted work",
+                "emotion": "anxiety, greed, control",
+                "trigger": "before asking an agent to build",
+                "action": "submit an idea for strategic attack",
+                "reward": "clear continue, revise, or stop decision",
+                "monetization": "paid planning intelligence",
+                "repeat_loop": "use for each new build idea and weekly review",
+                "references": ["failed AI wrappers", "successful retention loops"],
+                "behavior_signals": ["builders repeatedly make similar AI dashboards"],
+                "differentiation": "anti-generic planning intelligence",
+            },
+            {},
+        )
+
+        self.assertGreaterEqual(report["overall_score"], 80)
+        self.assertIn("fear/control", report["emotion_drivers"])
+        self.assertIn("upside/greed", report["emotion_drivers"])
+        self.assertIn("Position it", report["positioning_rewrite"])
+        self.assertIn("payment moment", report["monetization_moment"])
+        self.assertTrue(report["next_actions"])
+        self.assertEqual(validate_strategy_report_shape(report), [])
+
+    def test_strategy_loop_surfaces_negative_emotion_risk_boundary(self):
+        report = evaluate_strategy_payload(
+            {
+                "idea": "Competitive game item store",
+                "target_user": "competitive players",
+                "problem": "Players want revenge after losing status to rivals.",
+                "current_alternative": "They grind manually or leave the match.",
+                "pain_frequency": "Every time a rival attacks them.",
+                "solution": "Sell revenge boosts after an attack.",
+                "desire": "recover status",
+                "emotion": "anger, revenge, envy",
+                "trigger": "after a rival attack",
+                "action": "buy a revenge boost",
+                "reward": "recover status immediately",
+                "monetization": "paid revenge items",
+                "repeat_loop": "rival attacks create repeated revenge moments",
+                "references": ["competitive game economies"],
+                "behavior_signals": ["players spend after emotional loss"],
+                "differentiation": "emotion-triggered monetization",
+            },
+            {},
+        )
+
+        self.assertIn("toxic_conflict", report["risk_boundaries"])
+        self.assertIn("status_anxiety", report["risk_boundaries"])
+        self.assertEqual(report["decision"], "review_risk_boundary")
+        self.assertIn("risk_boundary_needs_review", report["risks"])
+        self.assertEqual(report["next_actions"][0]["action"], "request_review")
+        self.assertEqual(report["next_actions"][0]["target_role"], "reviewer")
 
 
 if __name__ == "__main__":

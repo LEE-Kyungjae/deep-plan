@@ -1,0 +1,11 @@
+{
+  "name": "problem-solution-pressure",
+  "version": "v1",
+  "role": "strategist",
+  "summary": "Validate a narrow, painful problem before expanding solution scope.",
+  "depends_on_capabilities": ["plan.read", "strategy.evaluate"],
+  "preferred_actions": ["evaluate_experience_strategy"],
+  "escalation_actions": ["request_review"],
+  "input_signals": ["target_user", "problem", "current_alternative", "pain_frequency", "solution"],
+  "prompt_asset": "prompts/problem-solution-pressure.md"
+}

@@ -1,0 +1,11 @@
+{
+  "name": "anti-generic-insight",
+  "version": "v1",
+  "role": "strategist",
+  "summary": "Detect generic LLM-built service patterns and force a sharper behavior, market, or timing wedge.",
+  "depends_on_capabilities": ["plan.read", "strategy.evaluate"],
+  "preferred_actions": ["evaluate_experience_strategy"],
+  "escalation_actions": ["request_review"],
+  "input_signals": ["genericness", "differentiation", "ai_wrapper", "dashboard", "todo", "crm"],
+  "prompt_asset": "prompts/anti-generic-insight.md"
+}

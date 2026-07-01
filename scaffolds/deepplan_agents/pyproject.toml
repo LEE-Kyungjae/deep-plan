@@ -18,6 +18,7 @@ include = ["deepplan_agents*"]
 [tool.setuptools.package-data]
 deepplan_agents = [
   "contracts/*.json",
+  "schemas/*.json",
   "skills/*.json",
   "skills/manifests/*.json",
   "prompts/*.md",

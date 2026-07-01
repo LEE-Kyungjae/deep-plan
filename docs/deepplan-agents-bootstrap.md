@@ -103,11 +103,13 @@ Start with one narrow loop:
 Phase 1:
 
 - `Planner`
+- `Strategist`
 - `Reviewer`
 
 Phase 2:
 
 - `Planner`
+- `Strategist`
 - `Researcher`
 - `Reviewer`
 
@@ -127,6 +129,8 @@ Use simple gates first:
 
 - if `health.status != "ok"`: block autonomous writes
 - if `qa.result == "CRITICAL_FAILURE"`: stop and route to reviewer
+- if strategist output says `revise_before_build`: sharpen problem, emotion, differentiation, and repeat loop before execution
+- if strategist output says `stop_and_research`: route to researcher for reference discovery and behavior evidence
 - if `qa.score` improves and no critical signal appears: continue
 - if stale write conflict occurs twice: stop and refresh the planning step
 

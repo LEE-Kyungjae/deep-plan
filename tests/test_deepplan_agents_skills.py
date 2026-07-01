@@ -20,7 +20,9 @@ class DeepPlanAgentsSkillsExampleTests(unittest.TestCase):
 
         self.assertIn("plan-framing", manifests)
         self.assertIn("review-triage", manifests)
+        self.assertIn("anti-generic-insight", manifests)
         self.assertEqual(manifests["review-triage"]["role"], "reviewer")
+        self.assertEqual(manifests["anti-generic-insight"]["role"], "strategist")
 
     def test_resolve_profile_uses_host_action_contract_profile(self):
         profile = registry.resolve_profile("planner")
@@ -28,6 +30,19 @@ class DeepPlanAgentsSkillsExampleTests(unittest.TestCase):
         self.assertEqual(profile["profile"], "planner_full")
         self.assertIn("plan.write", profile["capabilities"])
         self.assertIn("update_plan", profile["allowed_actions"])
+
+    def test_resolve_strategist_profile_uses_product_strategy_capability(self):
+        profile = registry.resolve_profile("strategist")
+        assignment = registry.resolve_skill_assignment("strategist")
+
+        self.assertEqual(profile["profile"], "strategist_product")
+        self.assertIn("strategy.evaluate", profile["capabilities"])
+        self.assertIn("evaluate_experience_strategy", profile["allowed_actions"])
+        self.assertIn("problem-solution-pressure", assignment["actual_skills"])
+        self.assertIn("desire-emotion-map", assignment["actual_skills"])
+        self.assertIn("experience-loop-design", assignment["actual_skills"])
+        self.assertIn("anti-generic-insight", assignment["actual_skills"])
+        self.assertIn("reference-to-insight", assignment["actual_skills"])
 
     def test_resolve_skill_assignment_uses_profile_defaults(self):
         assignment = registry.resolve_skill_assignment("reviewer")

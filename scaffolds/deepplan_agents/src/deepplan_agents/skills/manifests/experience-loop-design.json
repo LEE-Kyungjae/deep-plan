@@ -1,0 +1,11 @@
+{
+  "name": "experience-loop-design",
+  "version": "v1",
+  "role": "strategist",
+  "summary": "Turn features into a repeatable trigger, emotion, action, reward, monetization, and return loop.",
+  "depends_on_capabilities": ["plan.read", "strategy.evaluate"],
+  "preferred_actions": ["evaluate_experience_strategy"],
+  "escalation_actions": ["request_review"],
+  "input_signals": ["trigger", "emotion", "action", "reward", "monetization", "repeat_loop"],
+  "prompt_asset": "prompts/experience-loop-design.md"
+}

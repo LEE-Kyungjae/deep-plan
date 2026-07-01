@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DeepPlanStrategyReport",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "overall_score",
+    "decision",
+    "axes",
+    "emotion_drivers",
+    "risk_boundaries",
+    "generic_patterns",
+    "missing_fields",
+    "risks",
+    "recommendations",
+    "research_questions",
+    "next_actions",
+    "positioning_rewrite",
+    "monetization_moment"
+  ],
+  "properties": {
+    "overall_score": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "decision": {
+      "type": "string",
+      "enum": ["continue", "revise_before_build", "stop_and_research", "review_risk_boundary"]
+    },
+    "axes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["problem_solution", "desire_emotion", "experience_loop", "monetization_trigger", "anti_generic", "reference_insight"],
+      "properties": {
+        "problem_solution": {"type": "integer", "minimum": 0, "maximum": 100},
+        "desire_emotion": {"type": "integer", "minimum": 0, "maximum": 100},
+        "experience_loop": {"type": "integer", "minimum": 0, "maximum": 100},
+        "monetization_trigger": {"type": "integer", "minimum": 0, "maximum": 100},
+        "anti_generic": {"type": "integer", "minimum": 0, "maximum": 100},
+        "reference_insight": {"type": "integer", "minimum": 0, "maximum": 100}
+      }
+    },
+    "emotion_drivers": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "risk_boundaries": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "generic_patterns": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "missing_fields": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {"type": "string"}
+      }
+    },
+    "risks": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "recommendations": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "research_questions": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "next_actions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["target_role", "action", "priority", "reason", "payload"],
+        "properties": {
+          "target_role": {
+            "type": "string",
+            "enum": ["planner", "researcher", "reviewer", "strategist"]
+          },
+          "action": {"type": "string"},
+          "priority": {
+            "type": "string",
+            "enum": ["low", "medium", "high"]
+          },
+          "reason": {"type": "string"},
+          "payload": {"type": "object"}
+        }
+      }
+    },
+    "positioning_rewrite": {
+      "type": "string"
+    },
+    "monetization_moment": {
+      "type": "string"
+    }
+  }
+}

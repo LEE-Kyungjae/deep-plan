@@ -18,6 +18,9 @@ class DeepPlanClientLike(Protocol):
     ) -> Dict[str, Any]:
         ...
 
+    def execute_tool(self, tool_name: str, payload: Dict[str, Any], *, expected_fingerprint: str = "") -> Dict[str, Any]:
+        ...
+
     def preview_restore(self, *, previous: bool = False) -> Dict[str, Any]:
         ...
 
@@ -64,6 +67,22 @@ class DeepPlanAdapter:
             allow_retry=True,
             require_healthy=self.require_healthy_writes,
         )
+
+    def run_reference_discovery(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        tool_result = self.client.execute_tool(
+            "run_reference_discovery",
+            payload,
+            expected_fingerprint=str(payload.get("expected_fingerprint", "")).strip(),
+        )
+        post_cycle = self.snapshot()
+        return {
+            "operation": "run_reference_discovery",
+            "changed_fields": ["reference_discoveries"] if bool(payload.get("apply", False)) else [],
+            "post_fingerprint": str(post_cycle.get("fingerprint", "")).strip(),
+            "retried": False,
+            "tool_result": tool_result,
+            "post_cycle": post_cycle,
+        }
 
     def request_review(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self.client.apply_and_get_cycle(

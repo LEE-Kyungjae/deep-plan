@@ -61,6 +61,7 @@ A role is the stable job identity.
 Initial roles:
 
 - `planner`
+- `strategist`
 - `researcher`
 - `reviewer`
 
@@ -118,6 +119,7 @@ Profiles should remain small and explicit.
 Recommended initial profiles:
 
 - `planner_full`
+- `strategist_product`
 - `researcher_capture`
 - `reviewer_restore`
 
@@ -191,6 +193,19 @@ Start with a small set of reusable skills.
 - `boundary-awareness`
   Prevent drift into execution orchestration or product sprawl.
 
+### Strategist Skills
+
+- `problem-solution-pressure`
+  Validate the narrow user, painful problem, current alternative, and solution fit before expanding scope.
+- `desire-emotion-map`
+  Identify the positive or negative emotional driver that makes a user pay, return, share, or feel loss.
+- `experience-loop-design`
+  Convert feature ideas into trigger, emotion, action, reward, monetization, and repeat loops.
+- `anti-generic-insight`
+  Detect generic LLM-built service patterns such as another AI wrapper, dashboard, todo, CRM, or productivity assistant.
+- `reference-to-insight`
+  Extract behavior patterns, monetization moments, and transferable creative insights from papers, reviews, failures, and successful services.
+
 ### Reviewer Skills
 
 - `review-triage`
@@ -212,6 +227,7 @@ Recommended initial mapping:
 | `plan.read` | `plan-framing`, `qa-recovery`, `review-triage`, `restore-safety` |
 | `plan.write` | `plan-framing`, `qa-recovery` |
 | `evidence.append_and_replan` | `evidence-capture`, `reference-discovery` |
+| `strategy.evaluate` | `problem-solution-pressure`, `desire-emotion-map`, `experience-loop-design`, `anti-generic-insight`, `reference-to-insight` |
 | `review.request` | `human-handoff`, `boundary-awareness`, `decision-closure` |
 | `review.resolve` | `decision-closure`, `review-triage` |
 | `plan.restore` | `restore-safety` |

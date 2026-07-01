@@ -18,6 +18,14 @@
       "options": ["expected_fingerprint", "allow_retry", "require_healthy", "history_limit"]
     },
     {
+      "action": "run_reference_discovery",
+      "description": "Generate and optionally apply a structured reference-discovery pass.",
+      "required_capabilities": ["reference.discover"],
+      "payload_required": true,
+      "payload_keys": ["question", "context", "references", "rejected", "apply"],
+      "options": ["expected_fingerprint", "history_limit"]
+    },
+    {
       "action": "request_review",
       "description": "Open a human-review escalation and return an integrated cycle snapshot.",
       "required_capabilities": ["review.request"],
@@ -48,6 +56,14 @@
       "payload_required": false,
       "payload_keys": [],
       "options": ["expected_fingerprint", "allow_retry", "require_healthy", "history_limit"]
+    },
+    {
+      "action": "evaluate_experience_strategy",
+      "description": "Evaluate whether an idea has strong problem-solution, desire, experience-loop, monetization, differentiation, and reference-insight structure.",
+      "required_capabilities": ["plan.read", "strategy.evaluate"],
+      "payload_required": true,
+      "payload_keys": ["idea", "target_user", "problem", "current_alternative", "pain_frequency", "solution", "desire", "emotion", "trigger", "action", "reward", "references", "behavior_signals", "monetization", "repeat_loop", "differentiation"],
+      "options": ["history_limit"]
     }
   ],
   "capabilities": [
@@ -64,6 +80,10 @@
       "description": "Append evidence and run a planning cycle."
     },
     {
+      "name": "reference.discover",
+      "description": "Generate and apply structured reference-discovery records."
+    },
+    {
       "name": "review.request",
       "description": "Open a human-review escalation against the current plan state."
     },
@@ -74,6 +94,10 @@
     {
       "name": "plan.restore",
       "description": "Restore a previous revision."
+    },
+    {
+      "name": "strategy.evaluate",
+      "description": "Evaluate product strategy quality before execution."
     }
   ],
   "profiles": {
@@ -81,9 +105,13 @@
       "capabilities": ["plan.read", "plan.write", "evidence.append_and_replan", "review.request", "review.resolve", "plan.restore"],
       "allowed_actions": ["update_plan", "capture_evidence_cycle", "request_review", "resolve_review", "preview_restore_previous", "restore_previous"]
     },
+    "strategist_product": {
+      "capabilities": ["plan.read", "strategy.evaluate", "review.request"],
+      "allowed_actions": ["evaluate_experience_strategy", "request_review", "preview_restore_previous"]
+    },
     "researcher_capture": {
-      "capabilities": ["plan.read", "evidence.append_and_replan", "review.request"],
-      "allowed_actions": ["capture_evidence_cycle", "request_review", "preview_restore_previous"]
+      "capabilities": ["plan.read", "evidence.append_and_replan", "reference.discover", "review.request"],
+      "allowed_actions": ["capture_evidence_cycle", "run_reference_discovery", "request_review", "preview_restore_previous"]
     },
     "reviewer_restore": {
       "capabilities": ["plan.read", "review.request", "review.resolve", "plan.restore"],
@@ -92,6 +120,7 @@
   },
   "role_profiles": {
     "planner": "planner_full",
+    "strategist": "strategist_product",
     "researcher": "researcher_capture",
     "reviewer": "reviewer_restore"
   },
@@ -100,7 +129,7 @@
     "properties": {
       "action": {
         "type": "string",
-        "enum": ["update_plan", "capture_evidence_cycle", "request_review", "resolve_review", "preview_restore_previous", "restore_previous"]
+        "enum": ["update_plan", "capture_evidence_cycle", "run_reference_discovery", "request_review", "resolve_review", "preview_restore_previous", "restore_previous", "evaluate_experience_strategy"]
       },
       "payload": {
         "type": "object"

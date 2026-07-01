@@ -16,6 +16,7 @@ if str(SRC_ROOT) not in sys.path:
 
 import deepplan
 from deepplan_agents.console import main
+from scaffolds.deepplan_agents.tests.test_strategy_llm import VALID_REPORT
 
 
 class DeepPlanStateIsolation:
@@ -76,10 +77,13 @@ class DeepPlanAgentsConsoleTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         roles = {item["role"]: item for item in payload["roles"]}
         self.assertIn("planner", roles)
+        self.assertIn("strategist", roles)
         self.assertIn("researcher", roles)
         self.assertIn("reviewer", roles)
         self.assertIn("update_plan", roles["planner"]["allowed_actions"])
+        self.assertIn("evaluate_experience_strategy", roles["strategist"]["allowed_actions"])
         self.assertIn("capture_evidence_cycle", roles["researcher"]["allowed_actions"])
+        self.assertIn("run_reference_discovery", roles["researcher"]["allowed_actions"])
 
     def test_snapshot_and_planner_run_against_in_process_workspace(self):
         with DeepPlanStateIsolation():
@@ -103,6 +107,76 @@ class DeepPlanAgentsConsoleTests(unittest.TestCase):
         self.assertEqual(event["type"], "planner_step")
         self.assertEqual(event["summary"]["operation"], "update_plan")
         self.assertIn("goal", event["summary"]["changed_fields"])
+
+    def test_strategist_evaluates_experience_strategy(self):
+        with DeepPlanStateIsolation():
+            code, event = run_console(
+                [
+                    "run",
+                    "--role",
+                    "strategist",
+                    "--action",
+                    "evaluate_experience_strategy",
+                    "--payload-json",
+                    '{"idea":"AI productivity dashboard","target_user":"solo builder","solution":"dashboard"}',
+                ]
+            )
+
+        self.assertEqual(code, 0)
+        self.assertTrue(event["ok"])
+        self.assertEqual(event["type"], "strategy_step")
+        self.assertEqual(event["summary"]["operation"], "evaluate_experience_strategy")
+        self.assertIn("generic_llm_service_pattern", event["gate"]["reasons"])
+        self.assertIn("research_questions", event["result"]["strategy"])
+        self.assertIn("positioning_rewrite", event["result"]["strategy"])
+        self.assertIn("next_actions", event["result"]["strategy"])
+        self.assertEqual(event["result"]["strategy"]["next_actions"][0]["target_role"], "researcher")
+        self.assertEqual(event["result"]["strategy"]["next_actions"][0]["action"], "run_reference_discovery")
+
+    def test_prompt_builds_strategy_llm_bundle_without_provider_call(self):
+        with DeepPlanStateIsolation():
+            code, payload = run_console(["prompt"])
+
+        self.assertEqual(code, 0)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["type"], "strategy_prompt")
+        messages = payload["bundle"]["messages"]
+        schema = payload["bundle"]["schema"]
+        self.assertEqual(messages[0]["role"], "system")
+        self.assertIn("DeepPlan strategist agent", messages[0]["content"])
+        self.assertEqual(schema["title"], "DeepPlanStrategyReport")
+        self.assertIn("overall_score", schema["required"])
+        self.assertIn("next_actions", schema["required"])
+
+    def test_llm_runs_static_strategy_provider(self):
+        with DeepPlanStateIsolation():
+            code, payload = run_console(
+                [
+                    "llm",
+                    "--static-report-json",
+                    json.dumps(VALID_REPORT),
+                ]
+            )
+
+        self.assertEqual(code, 0)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["type"], "strategy_llm_report")
+        self.assertEqual(payload["report"]["decision"], "revise_before_build")
+
+    def test_route_validates_strategy_next_actions(self):
+        with DeepPlanStateIsolation():
+            code, payload = run_console(
+                [
+                    "route",
+                    "--report-json",
+                    json.dumps(VALID_REPORT),
+                ]
+            )
+
+        self.assertEqual(code, 0)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["type"], "strategy_action_routes")
+        self.assertTrue(payload["routes"][0]["executable"])
 
     def test_reviewer_cannot_run_planner_write(self):
         with DeepPlanStateIsolation():

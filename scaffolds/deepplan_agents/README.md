@@ -12,6 +12,7 @@ It demonstrates:
 - a runnable `deepplan-agents` console for immediate local agent steps
 - a minimal DeepPlan adapter surface
 - one-step planner / researcher / reviewer loops
+- one-step strategist loop for problem-solution, emotion, experience, monetization, reference-insight, and anti-generic evaluation
 - shared runtime decision gates for `qa` and `health`
 - runtime idempotency key and stale conflict retry policies
 - host-facing event envelopes for workflow outputs
@@ -32,6 +33,8 @@ Run directly from the scaffold without installing:
 PYTHONPATH=scaffolds/deepplan_agents/src python3 -m deepplan_agents.console agents
 PYTHONPATH=scaffolds/deepplan_agents/src python3 -m deepplan_agents.console snapshot
 PYTHONPATH=scaffolds/deepplan_agents/src python3 -m deepplan_agents.console run --role planner --action update_plan
+PYTHONPATH=scaffolds/deepplan_agents/src python3 -m deepplan_agents.console run --role strategist --action evaluate_experience_strategy
+PYTHONPATH=scaffolds/deepplan_agents/src python3 -m deepplan_agents.console prompt
 PYTHONPATH=scaffolds/deepplan_agents/src python3 -m deepplan_agents.console run --role researcher --action capture_evidence_cycle --session-id local --step-id research-1
 PYTHONPATH=scaffolds/deepplan_agents/src python3 -m deepplan_agents.console run --role reviewer --action request_review --session-id local --step-id review-1
 ```
@@ -68,6 +71,10 @@ Suggested next files to extend:
 - `src/deepplan_agents/adapters/deepplan_adapter.py`
 - `src/deepplan_agents/console.py`
 - `src/deepplan_agents/workflows/planner_loop.py`
+- `src/deepplan_agents/workflows/strategy_loop.py`
+- `src/deepplan_agents/strategy_prompt.py`
+- `src/deepplan_agents/strategy_llm.py`
+- `src/deepplan_agents/strategy_routes.py`
 - `src/deepplan_agents/workflows/research_loop.py`
 - `src/deepplan_agents/workflows/review_loop.py`
 - `src/deepplan_agents/runtime/decision_gate.py`

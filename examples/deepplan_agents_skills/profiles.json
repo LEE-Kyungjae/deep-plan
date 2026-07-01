@@ -4,6 +4,10 @@
       "role": "planner",
       "default_skills": ["plan-framing", "qa-recovery", "human-handoff"]
     },
+    "strategist_product": {
+      "role": "strategist",
+      "default_skills": ["problem-solution-pressure", "desire-emotion-map", "experience-loop-design", "anti-generic-insight", "reference-to-insight", "human-handoff"]
+    },
     "researcher_capture": {
       "role": "researcher",
       "default_skills": ["evidence-capture", "reference-discovery", "boundary-awareness"]

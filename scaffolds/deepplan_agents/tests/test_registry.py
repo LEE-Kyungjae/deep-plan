@@ -28,6 +28,19 @@ class DeepPlanAgentsScaffoldTests(unittest.TestCase):
         self.assertIn("plan.write", profile["capabilities"])
         self.assertIn("update_plan", profile["allowed_actions"])
 
+    def test_strategist_profile_resolves_product_intelligence_skills(self):
+        profile = registry.resolve_profile("strategist")
+        assignment = registry.resolve_skill_assignment("strategist")
+
+        self.assertEqual(profile["profile"], "strategist_product")
+        self.assertIn("strategy.evaluate", profile["capabilities"])
+        self.assertIn("evaluate_experience_strategy", profile["allowed_actions"])
+        self.assertIn("problem-solution-pressure", assignment["actual_skills"])
+        self.assertIn("desire-emotion-map", assignment["actual_skills"])
+        self.assertIn("experience-loop-design", assignment["actual_skills"])
+        self.assertIn("anti-generic-insight", assignment["actual_skills"])
+        self.assertIn("reference-to-insight", assignment["actual_skills"])
+
     def test_resolve_skill_assignment_uses_profile_defaults(self):
         assignment = registry.resolve_skill_assignment("reviewer")
 
