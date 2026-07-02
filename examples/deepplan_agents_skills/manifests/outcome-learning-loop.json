@@ -1,0 +1,11 @@
+{
+  "name": "outcome-learning-loop",
+  "version": "v1",
+  "role": "strategist",
+  "summary": "Convert shipped outcomes and usage signals into plan adjustments and personal planning profile learning.",
+  "depends_on_capabilities": ["plan.read", "strategy.learn"],
+  "preferred_actions": ["analyze_outcome_learning", "evaluate_experience_strategy"],
+  "escalation_actions": ["capture_evidence_cycle", "request_review"],
+  "input_signals": ["shipped_changes", "usage_signals", "revenue_signals", "retention_signals", "user_feedback", "failed_assumptions"],
+  "prompt_asset": "prompts/outcome-learning-loop.md"
+}

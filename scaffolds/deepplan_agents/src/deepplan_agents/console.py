@@ -62,6 +62,24 @@ DEFAULT_PAYLOADS: Dict[str, Dict[str, Any]] = {
             "overused_solution_patterns": ["dashboard", "assistant"]
         }
     },
+    "analyze_outcome_learning": {
+        "entry_mode": "mid_project",
+        "project_stage": "prototype after first user trials",
+        "existing_artifacts": ["current plan", "prototype", "usage notes", "user feedback"],
+        "current_plan": "AI-first product intelligence for builders before or during a project.",
+        "shipped_changes": ["AI-first strategist report schema", "creative direction action", "mid-project intake"],
+        "usage_signals": ["users ask whether the idea is generic before building", "mid-project users bring artifacts and pivot pressure"],
+        "revenue_signals": ["willingness to pay appears around avoiding wasted build time"],
+        "retention_signals": ["repeat usage likely around each new idea, pivot, or weekly review"],
+        "user_feedback": ["needs to work after a project already started", "must always use AI for judgment"],
+        "failed_assumptions": ["pre-build-only positioning is too narrow"],
+        "new_constraints": ["keep DeepPlan plan-only", "do not use rule-based strategy scoring"],
+        "personal_profile": {
+            "repeated_biases": ["implementation-first planning"],
+            "weak_axes": ["outcome_learning"],
+            "overused_solution_patterns": ["dashboard", "assistant"]
+        }
+    },
     "update_plan": {
         "goal": "Agent console planning pass",
         "success_metric": "Produce one reviewable planning cycle",
@@ -272,7 +290,7 @@ def build_parser() -> argparse.ArgumentParser:
     prompt = sub.add_parser("prompt", help="Build the strategist LLM prompt bundle without calling a provider.")
     prompt.add_argument(
         "--action",
-        choices=["evaluate_experience_strategy", "generate_creative_directions"],
+        choices=["evaluate_experience_strategy", "generate_creative_directions", "analyze_outcome_learning"],
         default="evaluate_experience_strategy",
     )
     prompt.add_argument("--payload-json", default="")
@@ -282,7 +300,7 @@ def build_parser() -> argparse.ArgumentParser:
     llm = sub.add_parser("llm", help="Run the strategist LLM boundary with an AI provider.")
     llm.add_argument(
         "--action",
-        choices=["evaluate_experience_strategy", "generate_creative_directions"],
+        choices=["evaluate_experience_strategy", "generate_creative_directions", "analyze_outcome_learning"],
         default="evaluate_experience_strategy",
     )
     llm.add_argument("--payload-json", default="")

@@ -145,7 +145,7 @@ class HostStep:
 
             if action == "update_plan":
                 return PlannerLoop(self.adapter, role=self.role).run_event(payload)
-            if action in {"evaluate_experience_strategy", "generate_creative_directions"}:
+            if action in {"evaluate_experience_strategy", "generate_creative_directions", "analyze_outcome_learning"}:
                 return StrategyLoop(self.adapter, role=self.role, provider=self.strategy_provider).run_event(payload, action_name=action)
             if action == "capture_evidence_cycle":
                 return ResearchLoop(self.adapter, role=self.role).run_event(payload, session_id=session_id, step_id=step_id)

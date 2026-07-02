@@ -211,6 +211,8 @@ Start with a small set of reusable skills.
   Track repeated planning weaknesses, weak axes, and overused solution patterns for the current user.
 - `mid-project-intake`
   Let DeepPlan enter an already-started project using existing artifacts, constraints, traction, and pivot signals.
+- `outcome-learning-loop`
+  Convert shipped outcomes, usage signals, revenue signals, retention, feedback, and failed assumptions into plan adjustments.
 
 ### Reviewer Skills
 
@@ -235,6 +237,7 @@ Recommended initial mapping:
 | `evidence.append_and_replan` | `evidence-capture`, `reference-discovery` |
 | `strategy.evaluate` | `problem-solution-pressure`, `desire-emotion-map`, `experience-loop-design`, `anti-generic-insight`, `reference-to-insight`, `personal-planning-profile`, `mid-project-intake` |
 | `strategy.generate` | `creative-recombination`, `reference-to-insight` |
+| `strategy.learn` | `outcome-learning-loop`, `personal-planning-profile` |
 | `review.request` | `human-handoff`, `boundary-awareness`, `decision-closure` |
 | `review.resolve` | `decision-closure`, `review-triage` |
 | `plan.restore` | `restore-safety` |

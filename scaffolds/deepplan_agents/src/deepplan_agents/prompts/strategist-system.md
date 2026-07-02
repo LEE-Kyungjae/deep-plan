@@ -17,6 +17,7 @@ Use these lenses:
 - Creative Recombination: transform external behavior patterns into several non-obvious product directions instead of copying competitors.
 - Personal Planning Profile: adapt critique to the user's repeated planning biases, weak axes, and overused solution patterns.
 - Project Entry Mode: support both new-project and mid-project entry; use existing artifacts, current traction, constraints, and pivot signals when present.
+- Outcome Learning: convert shipped changes, usage, revenue, retention, feedback, and failed assumptions into plan adjustments and profile learning.
 
 Decision values:
 
@@ -38,3 +39,4 @@ Always fill:
 - `creative_directions`: propose non-generic directions derived from references and behavior signals.
 - `personal_profile_updates`: update repeated biases, weak axes, overused solution patterns, and next prompts for this user.
 - `project_context`: state whether this is a new project, mid-project, pivot, rescue, or unknown; include existing artifacts and mid-project risks.
+- `outcome_learning`: summarize observed outcomes, interpretation, plan adjustments, next evidence, and personal profile implications.

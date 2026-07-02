@@ -77,6 +77,13 @@ VALID_REPORT = {
         "existing_artifacts_used": [],
         "mid_project_risks": [],
     },
+    "outcome_learning": {
+        "observed_outcomes": ["builders ask for pre-build checks"],
+        "interpretation": ["Avoided build waste is the strongest early signal."],
+        "plan_adjustments": ["Keep strategy gate before execution."],
+        "next_evidence": ["Measure repeat use across idea and pivot cycles."],
+        "profile_implications": ["Watch for solution-first planning."],
+    },
 }
 
 

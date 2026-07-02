@@ -71,6 +71,24 @@ class DeepPlanStrategyPromptTests(unittest.TestCase):
         self.assertIn("existing_artifacts", content)
         self.assertIn("project_context", content)
 
+    def test_outcome_prompt_supports_project_learning_context(self):
+        bundle = build_strategy_prompt_bundle(
+            {
+                "entry_mode": "mid_project",
+                "project_stage": "prototype",
+                "usage_signals": ["users return for pivot checks"],
+                "revenue_signals": ["one user paid before build"],
+                "failed_assumptions": ["pre-build-only is too narrow"],
+            },
+            {"plan": {"goal": "Learn from outcomes"}, "qa": {"result": "PASS"}, "health": {"status": "ok"}},
+            action="analyze_outcome_learning",
+        )
+
+        content = bundle["messages"][1]["content"]
+        self.assertIn("analyze_outcome_learning", content)
+        self.assertIn("usage_signals", content)
+        self.assertIn("outcome_learning", content)
+
 
 if __name__ == "__main__":
     unittest.main()

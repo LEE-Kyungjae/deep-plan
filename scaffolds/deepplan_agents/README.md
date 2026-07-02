@@ -12,7 +12,7 @@ It demonstrates:
 - a runnable `deepplan-agents` console for immediate local agent steps
 - a minimal DeepPlan adapter surface
 - one-step planner / researcher / reviewer loops
-- AI-provider-backed strategist loop for problem-solution, emotion, experience, monetization, reference-insight, creative direction, personal profile, and anti-generic evaluation
+- AI-provider-backed strategist loop for problem-solution, emotion, experience, monetization, reference-insight, creative direction, personal profile, outcome learning, and anti-generic evaluation
 - OpenAI Responses provider boundary for structured JSON strategy reports
 - shared runtime decision gates for `qa` and `health`
 - runtime idempotency key and stale conflict retry policies
@@ -54,6 +54,13 @@ PYTHONPATH=scaffolds/deepplan_agents/src \
 python3 -m deepplan_agents.console run \
   --role strategist \
   --action generate_creative_directions \
+  --provider openai
+
+OPENAI_API_KEY=... \
+PYTHONPATH=scaffolds/deepplan_agents/src \
+python3 -m deepplan_agents.console run \
+  --role strategist \
+  --action analyze_outcome_learning \
   --provider openai
 ```
 

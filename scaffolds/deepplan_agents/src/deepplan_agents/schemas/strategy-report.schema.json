@@ -20,7 +20,8 @@
     "reference_insights",
     "creative_directions",
     "personal_profile_updates",
-    "project_context"
+    "project_context",
+    "outcome_learning"
   ],
   "properties": {
     "overall_score": {
@@ -158,6 +159,18 @@
         "stage": {"type": "string"},
         "existing_artifacts_used": {"type": "array", "items": {"type": "string"}},
         "mid_project_risks": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "outcome_learning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["observed_outcomes", "interpretation", "plan_adjustments", "next_evidence", "profile_implications"],
+      "properties": {
+        "observed_outcomes": {"type": "array", "items": {"type": "string"}},
+        "interpretation": {"type": "array", "items": {"type": "string"}},
+        "plan_adjustments": {"type": "array", "items": {"type": "string"}},
+        "next_evidence": {"type": "array", "items": {"type": "string"}},
+        "profile_implications": {"type": "array", "items": {"type": "string"}}
       }
     }
   }

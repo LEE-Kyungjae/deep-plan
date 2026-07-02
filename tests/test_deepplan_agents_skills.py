@@ -38,8 +38,10 @@ class DeepPlanAgentsSkillsExampleTests(unittest.TestCase):
         self.assertEqual(profile["profile"], "strategist_product")
         self.assertIn("strategy.evaluate", profile["capabilities"])
         self.assertIn("strategy.generate", profile["capabilities"])
+        self.assertIn("strategy.learn", profile["capabilities"])
         self.assertIn("evaluate_experience_strategy", profile["allowed_actions"])
         self.assertIn("generate_creative_directions", profile["allowed_actions"])
+        self.assertIn("analyze_outcome_learning", profile["allowed_actions"])
         self.assertIn("problem-solution-pressure", assignment["actual_skills"])
         self.assertIn("desire-emotion-map", assignment["actual_skills"])
         self.assertIn("experience-loop-design", assignment["actual_skills"])
@@ -48,6 +50,7 @@ class DeepPlanAgentsSkillsExampleTests(unittest.TestCase):
         self.assertIn("creative-recombination", assignment["actual_skills"])
         self.assertIn("personal-planning-profile", assignment["actual_skills"])
         self.assertIn("mid-project-intake", assignment["actual_skills"])
+        self.assertIn("outcome-learning-loop", assignment["actual_skills"])
 
     def test_resolve_skill_assignment_uses_profile_defaults(self):
         assignment = registry.resolve_skill_assignment("reviewer")

@@ -17,6 +17,7 @@ The stronger product direction is:
 - generate non-generic directions by recombining reference patterns
 - adapt critique to the user's repeated planning weaknesses
 - enter an already-started project without assuming a clean slate
+- learn from shipped outcomes, usage signals, revenue signals, retention, and feedback
 - preserve the planning state, evidence, and revision trail in DeepPlan
 
 The strategist agent is the layer that turns this into an operating loop.
@@ -56,6 +57,7 @@ The strategist evaluates ideas through these axes:
 | Creative Recombination | Which transferable behavior principles can become non-obvious product directions? |
 | Personal Profile | Which repeated planning weakness should the strategist compensate for next time? |
 | Project Context | Is this a new project, mid-project rescue, pivot, or continuation decision? |
+| Outcome Learning | What changed after shipping or testing, and how should plan/profile change? |
 | Risk Boundary | Does the loop rely on exploitation, toxic conflict, resentment, or fragile trust? |
 
 ## Product Loop
@@ -84,6 +86,7 @@ The scaffold includes:
 - actions:
   - `evaluate_experience_strategy`
   - `generate_creative_directions`
+  - `analyze_outcome_learning`
 - skills:
   - `problem-solution-pressure`
   - `desire-emotion-map`
@@ -93,6 +96,7 @@ The scaffold includes:
   - `creative-recombination`
   - `personal-planning-profile`
   - `mid-project-intake`
+  - `outcome-learning-loop`
 
 Build the AI prompt bundle locally:
 
@@ -143,6 +147,17 @@ python3 -m deepplan_agents.console run \
   --provider openai
 ```
 
+Run outcome learning after a project has shipped, pivoted, or collected usage signals:
+
+```bash
+OPENAI_API_KEY=... \
+PYTHONPATH=scaffolds/deepplan_agents/src \
+python3 -m deepplan_agents.console run \
+  --role strategist \
+  --action analyze_outcome_learning \
+  --provider openai
+```
+
 Expected behavior:
 
 - generic service patterns are detected
@@ -175,6 +190,7 @@ The AI strategist must return a structured report with these fields:
 - `creative_directions`
 - `personal_profile_updates`
 - `project_context`
+- `outcome_learning`
 
 The model owns judgment quality.
 Hosts own deterministic validation of the report shape, next-action routes, and capability boundaries.
@@ -189,6 +205,9 @@ This is where DeepPlan should fight the common LLM failure mode of producing the
 
 `project_context` keeps DeepPlan useful after a project has already started.
 Mid-project analysis should use current artifacts, constraints, traction, pivot signals, and sunk-cost pressure instead of pretending the user is at day zero.
+
+`outcome_learning` closes the loop after work has happened.
+It should convert shipped changes, usage, revenue, retention, feedback, failed assumptions, and new constraints into plan adjustments, next evidence, and personal profile implications.
 
 `next_actions` is the bridge from judgment to execution.
 The strategist does not execute actions directly.

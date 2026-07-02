@@ -78,6 +78,7 @@ REPORT_REQUIRED_KEYS = [
     "creative_directions",
     "personal_profile_updates",
     "project_context",
+    "outcome_learning",
 ]
 
 REPORT_AXIS_KEYS = [
@@ -343,6 +344,14 @@ def validate_strategy_report_shape(report: Dict[str, Any]) -> List[str]:
                     errors.append(f"project_context.{key} must be an array of strings")
             elif not isinstance(value, str):
                 errors.append(f"project_context.{key} must be a string")
+    outcome_learning = report.get("outcome_learning")
+    if not isinstance(outcome_learning, dict):
+        errors.append("outcome_learning must be an object")
+    else:
+        for key in ["observed_outcomes", "interpretation", "plan_adjustments", "next_evidence", "profile_implications"]:
+            value = outcome_learning.get(key)
+            if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+                errors.append(f"outcome_learning.{key} must be an array of strings")
     return errors
 
 
@@ -485,6 +494,13 @@ def evaluate_strategy_payload(payload: Dict[str, Any], plan: Dict[str, Any]) -> 
             "stage": str(payload.get("project_stage", "")).strip() or "unknown",
             "existing_artifacts_used": [str(item) for item in payload.get("existing_artifacts", []) if str(item).strip()],
             "mid_project_risks": [str(item) for item in payload.get("pivot_signals", []) if str(item).strip()],
+        },
+        "outcome_learning": {
+            "observed_outcomes": [str(item) for item in payload.get("usage_signals", []) if str(item).strip()],
+            "interpretation": ["AI interpretation required"],
+            "plan_adjustments": [positioning_rewrite],
+            "next_evidence": research_questions[:3],
+            "profile_implications": ["AI extraction required"],
         },
     }
     errors = validate_strategy_report_shape(report)

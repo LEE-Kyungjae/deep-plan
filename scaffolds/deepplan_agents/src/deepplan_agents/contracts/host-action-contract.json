@@ -72,6 +72,14 @@
       "payload_required": true,
       "payload_keys": ["topic", "entry_mode", "project_stage", "existing_artifacts", "current_plan", "constraints", "pivot_signals", "references", "behavior_signals", "success_cases", "failure_cases", "papers", "reviews", "personal_profile"],
       "options": ["history_limit"]
+    },
+    {
+      "action": "analyze_outcome_learning",
+      "description": "Use AI to convert shipped outcomes, usage signals, revenue signals, retention signals, and feedback into plan and profile learning.",
+      "required_capabilities": ["plan.read", "strategy.learn"],
+      "payload_required": true,
+      "payload_keys": ["entry_mode", "project_stage", "existing_artifacts", "current_plan", "shipped_changes", "usage_signals", "revenue_signals", "retention_signals", "user_feedback", "failed_assumptions", "new_constraints", "personal_profile"],
+      "options": ["history_limit"]
     }
   ],
   "profiles": {
@@ -80,8 +88,8 @@
       "allowed_actions": ["update_plan", "capture_evidence_cycle", "request_review", "resolve_review", "preview_restore_previous", "restore_previous"]
     },
     "strategist_product": {
-      "capabilities": ["plan.read", "strategy.evaluate", "strategy.generate", "review.request"],
-      "allowed_actions": ["evaluate_experience_strategy", "generate_creative_directions", "request_review", "preview_restore_previous"]
+      "capabilities": ["plan.read", "strategy.evaluate", "strategy.generate", "strategy.learn", "review.request"],
+      "allowed_actions": ["evaluate_experience_strategy", "generate_creative_directions", "analyze_outcome_learning", "request_review", "preview_restore_previous"]
     },
     "researcher_capture": {
       "capabilities": ["plan.read", "evidence.append_and_replan", "reference.discover", "review.request"],
